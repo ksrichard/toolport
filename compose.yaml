@@ -1,0 +1,53 @@
+name: toolport
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: toolport
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: toolport
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Only localhost can reach this port. It is for running the backend and tests on the host.
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toolport -d toolport"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    environment:
+      DATABASE_URL: postgres://toolport:${POSTGRES_PASSWORD}@postgres:5432/toolport
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8080"
+
+  caddy:
+    build:
+      context: .
+      dockerfile: docker/caddy.Dockerfile
+    environment:
+      TOOLPORT_DOMAIN: ${TOOLPORT_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

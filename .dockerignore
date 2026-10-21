@@ -1,0 +1,9 @@
+target
+**/node_modules
+web/dist
+.env
+.git
+.github
+mockups
+.claude
+**/.DS_Store

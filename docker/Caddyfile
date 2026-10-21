@@ -1,0 +1,16 @@
+{$TOOLPORT_DOMAIN:localhost} {
+	@backend path /api/* /auth/* /mcp /mcp/*
+	handle @backend {
+		reverse_proxy server:8080 {
+			# SSE and MCP responses stream. Send each chunk to the client at once.
+			flush_interval -1
+		}
+	}
+
+	handle {
+		encode zstd gzip
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

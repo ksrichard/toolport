@@ -22,15 +22,15 @@ use the same shell, panels, and tokens.
   - `clap` (derive + env): the server settings. Each setting is a flag and an env var.
 - MCP: `rmcp` (official Rust MCP SDK), Streamable HTTP transport, mounted in axum.
 - OpenAPI parsing: `openapiv3` (3.0) with serde. Reject 2.0 (Swagger) specs with a clear error.
-- Upstream HTTP calls: `reqwest`.
+- Upstream HTTP calls and GitHub calls: `reqwest` (rustls).
 - Database: PostgreSQL through `sqlx` with migrations. Local dev runs Postgres in Docker Compose.
+- Auth helpers: `jsonwebtoken` (JWT), `axum-extra` + `cookie` (the refresh cookie),
+  `rand` (random tokens), `sha2` (token hashes).
 - Dashboard login: GitHub OAuth only (no passwords). Add other login methods later only if needed.
-- Authorization: JWT (`jsonwebtoken` crate, HS256, secret from an env var).
-  - Dashboard: after the GitHub login, the server issues a short-lived JWT (15 min) in an
-    HttpOnly, Secure, SameSite=Lax cookie, plus a refresh token (stored hashed in the DB).
-  - MCP clients: each token is a JWT with the server id and a unique `jti`. The server
-    checks that the `jti` row exists and is not revoked, so revoke works at once.
-  - The token value shows once, at creation. The DB stores only the `jti` and metadata.
+- Authorization: JWT (HS256, secret from `JWT_SECRET`). See "Auth" below.
+- MCP clients (milestone 4): each token is a JWT with the server id, a unique `jti`, and its
+  own audience. The server checks that the `jti` row exists and is not revoked, so revoke
+  works at once. The token value shows once, at creation. The DB stores only the `jti`.
 - Logs: `tracing` with JSON output.
 - Frontend: React + Vite + TypeScript. Plain CSS with the mockup's CSS variables. No UI kit.
 - Shared types: `ts-rs` generates TypeScript types from the Rust API types.
@@ -47,6 +47,30 @@ use the same shell, panels, and tokens.
     compose.yaml          Docker Compose file for the whole system
     .env.example          all env vars with safe example values (no real secrets)
     mockups/              design files
+
+## Auth
+Code: `crates/server/src/auth/`, `web/src/api.ts`.
+- Every `/api/*` request sends the access JWT as `Authorization: Bearer <jwt>`. The JWT
+  lives 15 minutes, and its audience is `toolport-dashboard`. The frontend keeps it in memory only.
+- The refresh token is the only long-lived token. It is 32 random bytes, and it lives
+  30 days in an HttpOnly, Secure, SameSite=Strict cookie with `Path=/auth`. The browser sends
+  it only to `/auth/*`. The DB keeps only its SHA-256 hash.
+- Each refresh rotates the token. A used or revoked refresh token gives 401.
+- Flow:
+  1. `GET /auth/github/login` sets a short-lived `state` cookie and redirects to GitHub.
+  2. `GET /auth/github/callback` checks `state`, gets the GitHub user, creates or updates the
+     user row, sets the refresh cookie, and redirects to `/`. A failure redirects to
+     `/?login_error=<code>`.
+  3. The app calls `POST /auth/refresh` and gets `{access_token, token_type, expires_in}`.
+  4. When an API call returns 401, the app refreshes once and retries.
+  5. `POST /auth/logout` revokes the refresh token and clears the cookie.
+- Do not put the access JWT in a cookie, `localStorage`, or a URL.
+
+GitHub OAuth app (one-time setup, https://github.com/settings/developers):
+- Homepage URL: `https://localhost`
+- Callback URL: `https://localhost/auth/github/callback` (Docker Compose)
+- A GitHub OAuth app allows only one callback host and port. For the Vite dev server, make a
+  second app with `http://localhost:5173/auth/github/callback`, and use its ID and secret on the host.
 
 ## Docker setup
 One command starts the whole system: `docker compose up --build`.
@@ -75,7 +99,9 @@ Caddy routes (`docker/Caddyfile`):
 
 Config:
 - All secrets come from `.env` (not committed): `DATABASE_URL`, `JWT_SECRET`,
-  `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOOLPORT_DOMAIN`, `POSTGRES_PASSWORD`.
+  `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOOLPORT_DOMAIN`, `POSTGRES_PASSWORD`, `PUBLIC_URL`.
+- Compose sets the server's `PUBLIC_URL` to `https://$TOOLPORT_DOMAIN`. The `PUBLIC_URL` in
+  `.env` is for host runs only.
 - `.env.example` lists every variable. CI checks that the Compose file is valid
   (`docker compose config`).
 
@@ -123,9 +149,10 @@ Each milestone ends with working code, tests, and a short demo.
 5. Call log and metrics. Save every call. Compute calls per minute, error rate, p50 and
    p95 latency, and open sessions. Send new calls and metrics to the dashboard over SSE.
 6. Users and dashboard shell. Add sign-in with GitHub (OAuth) and logout. The first
-   GitHub sign-in creates the user. The server then issues the JWT cookie and the refresh
-   token. Build the side menu, the header with the MCP URL and the Copy button, and the
-   theme switcher (saved per user).
+   GitHub sign-in creates the user. The server then sets the refresh cookie, and the app gets
+   a Bearer JWT from `/auth/refresh`. Build the side menu, the header with the MCP URL and the
+   Copy button, and the theme switcher (saved per user).
+   Status: done, except the MCP URL and the Copy button. They need servers (milestone 11).
 7. Live page. Build it from the mockup with real data from milestone 5. Keep the Pause button.
 8. Tools page. List all tools with on/off switches. When a tool changes, send
    `notifications/tools/list_changed` to the open MCP sessions. Keep at least one tool on.
@@ -150,7 +177,8 @@ Each milestone ends with working code, tests, and a short demo.
 - Ask before you add a new dependency that is not in the Stack list.
 
 ## Commands
-- First time: `cp .env.example .env`, then set `POSTGRES_PASSWORD` and the same password in `DATABASE_URL`.
+- First time: `cp .env.example .env`. Set `POSTGRES_PASSWORD` and the same password in
+  `DATABASE_URL`. Set `JWT_SECRET` (`openssl rand -hex 32`) and the GitHub OAuth app values.
 - Whole system: `docker compose up --build`, then open `https://localhost`.
   Your browser warns about the local Caddy certificate the first time.
 - Database only: `docker compose up -d --wait postgres`

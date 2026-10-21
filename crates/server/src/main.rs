@@ -1,38 +1,25 @@
-use std::{net::SocketAddr, process::ExitCode};
+use std::process::ExitCode;
 
 use clap::Parser;
-use server::error::{StartupError, error_chain};
+use server::{
+    config::Config,
+    error::{StartupError, error_chain},
+    state::AppState,
+};
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-/// Each setting can come from a command-line flag or an env var. Docker uses the env vars.
-#[derive(Parser)]
-#[command(name = "toolport-server", version, about = "ToolPort backend")]
-struct Args {
-    /// Postgres connection URL.
-    #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
-    database_url: String,
-
-    /// Address and port to listen on.
-    #[arg(long, env = "BIND_ADDR", default_value = "0.0.0.0:8080")]
-    bind_addr: SocketAddr,
-
-    /// Maximum number of open database connections.
-    #[arg(long, env = "DATABASE_MAX_CONNECTIONS", default_value_t = 10)]
-    database_max_connections: u32,
-}
-
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args = Args::parse();
+    let config = Config::parse();
 
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    match run(args).await {
+    match run(config).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(error = %error_chain(&error), "server stopped");
@@ -41,24 +28,24 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(args: Args) -> Result<(), StartupError> {
+async fn run(config: Config) -> Result<(), StartupError> {
     let pool = PgPoolOptions::new()
-        .max_connections(args.database_max_connections)
-        .connect(&args.database_url)
+        .max_connections(config.database_max_connections)
+        .connect(&config.database_url)
         .await
         .map_err(StartupError::DatabaseConnect)?;
     sqlx::migrate!("../../migrations").run(&pool).await?;
 
-    let listener =
-        TcpListener::bind(args.bind_addr)
-            .await
-            .map_err(|source| StartupError::Bind {
-                addr: args.bind_addr,
-                source,
-            })?;
-    tracing::info!(bind_addr = %args.bind_addr, "server listening");
+    let listener = TcpListener::bind(config.bind_addr)
+        .await
+        .map_err(|source| StartupError::Bind {
+            addr: config.bind_addr,
+            source,
+        })?;
+    tracing::info!(bind_addr = %config.bind_addr, "server listening");
 
-    axum::serve(listener, server::app(pool))
+    let state = AppState::new(pool, &config)?;
+    axum::serve(listener, server::app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(StartupError::Serve)

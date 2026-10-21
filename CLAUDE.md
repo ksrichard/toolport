@@ -1,0 +1,163 @@
+# ToolPort
+
+ToolPort turns REST APIs into MCP servers. A user imports an OpenAPI spec. ToolPort then
+serves each API operation as an MCP tool at `https://<host>/mcp/<server-name>`. AI clients
+such as Claude Desktop and Cursor connect to that URL with a token and call the tools.
+A web dashboard shows the live traffic and lets the user control tools, tokens, and servers.
+
+This is a personal course project. Do not use the shared company skills folder. Do not
+name that company anywhere in this repo.
+
+## Design source
+`mockups/toolport-mockups.html` is the design for the Live page. Keep its layout, text,
+and the three themes (Neon terminal = default, Calm dark, Clean light). The other pages
+use the same shell, panels, and tokens.
+
+## Stack
+- Backend: Rust (stable, edition 2024). Use these crates for these jobs:
+  - `tokio`: the async runtime.
+  - `axum`: the HTTP server and routing.
+  - `thiserror`: typed error enums everywhere, including `main` (see "Errors" below).
+  - `anyhow`: only in throwaway scripts or dev tools. Do not use it in `toolport-core` or `server`.
+  - `clap` (derive + env): the server settings. Each setting is a flag and an env var.
+- MCP: `rmcp` (official Rust MCP SDK), Streamable HTTP transport, mounted in axum.
+- OpenAPI parsing: `openapiv3` (3.0) with serde. Reject 2.0 (Swagger) specs with a clear error.
+- Upstream HTTP calls: `reqwest`.
+- Database: PostgreSQL through `sqlx` with migrations. Local dev runs Postgres in Docker Compose.
+- Dashboard login: GitHub OAuth only (no passwords). Add other login methods later only if needed.
+- Authorization: JWT (`jsonwebtoken` crate, HS256, secret from an env var).
+  - Dashboard: after the GitHub login, the server issues a short-lived JWT (15 min) in an
+    HttpOnly, Secure, SameSite=Lax cookie, plus a refresh token (stored hashed in the DB).
+  - MCP clients: each token is a JWT with the server id and a unique `jti`. The server
+    checks that the `jti` row exists and is not revoked, so revoke works at once.
+  - The token value shows once, at creation. The DB stores only the `jti` and metadata.
+- Logs: `tracing` with JSON output.
+- Frontend: React + Vite + TypeScript. Plain CSS with the mockup's CSS variables. No UI kit.
+- Shared types: `ts-rs` generates TypeScript types from the Rust API types.
+- Live updates to the dashboard: Server-Sent Events (SSE).
+
+## Repo layout
+    Cargo.toml            Cargo workspace
+    crates/core           package `toolport-core`: domain types, OpenAPI -> tool conversion, no I/O
+                          (the name `core` clashes with Rust's built-in crate)
+    crates/server         axum app: REST API for the dashboard, MCP endpoint, SSE, DB
+    web/                  React app (Vite)
+    migrations/           sqlx migrations
+    docker/               Dockerfiles and the Caddyfile
+    compose.yaml          Docker Compose file for the whole system
+    .env.example          all env vars with safe example values (no real secrets)
+    mockups/              design files
+
+## Docker setup
+One command starts the whole system: `docker compose up --build`.
+
+Services in `compose.yaml`:
+- `postgres`: the `postgres:17` image. A named volume keeps the data. A health check uses `pg_isready`.
+- `server`: the Rust backend. It starts after `postgres` is healthy. It runs the sqlx
+  migrations at startup. It listens on port 8080 inside the Docker network only.
+- `caddy`: the HTTP proxy and the only service with public ports (80 and 443).
+  It serves the built React app and sends API traffic to `server`.
+
+Images:
+- `docker/server.Dockerfile`: a multi-stage build. Stage 1 uses `rust:1-bookworm` and
+  `cargo-chef` to cache dependencies. Stage 2 is `debian:bookworm-slim` with only the
+  binary and CA certificates. The process runs as a non-root user.
+- `docker/caddy.Dockerfile`: stage 1 uses `node:22` to run `npm ci && npm run build` in `web/`.
+  Stage 2 is the `caddy:2` image with the `dist/` folder and the Caddyfile.
+
+Caddy routes (`docker/Caddyfile`):
+- `/api/*`, `/auth/*`, `/mcp/*` go to `server:8080`.
+- Every other path serves the React app, with a fallback to `index.html`.
+- The SSE and MCP routes use `flush_interval -1`, so events reach the client at once.
+- The site address comes from the `TOOLPORT_DOMAIN` env var. The default is `localhost`,
+  and Caddy uses its own local TLS certificate for it. With a real domain, Caddy gets a
+  Let's Encrypt certificate.
+
+Config:
+- All secrets come from `.env` (not committed): `DATABASE_URL`, `JWT_SECRET`,
+  `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOOLPORT_DOMAIN`, `POSTGRES_PASSWORD`.
+- `.env.example` lists every variable. CI checks that the Compose file is valid
+  (`docker compose config`).
+
+Local development without Docker for the app code: run only Postgres with
+`docker compose up -d postgres`, then run the backend and Vite on the host.
+Vite proxies `/api`, `/auth`, and `/mcp` to `localhost:8080`.
+
+## Errors
+- Every fallible function returns a typed `thiserror` enum. Do not return `anyhow::Error`,
+  `Box<dyn Error>`, or `String` errors.
+- Each module or area has its own enum (for example `StartupError`, `ApiError`). Keep the
+  underlying error as `#[source]` or `#[from]`, so the cause chain stays.
+- Error messages are lowercase and have no final period.
+- HTTP handlers return `Result<_, ApiError>`. `ApiError` maps each variant to one HTTP status
+  and one stable `snake_case` code. The response body is always
+  `{"error": "<code>", "message": "<text>"}`. The client never sees the inner cause.
+- `ApiError` logs the full cause chain with `error_chain()` (`crates/server/src/error.rs`).
+- `main` calls `run() -> Result<(), StartupError>`, logs the chain, and exits with code 1.
+- Do not use `unwrap()` or `expect()` outside tests.
+
+## Main concepts
+- User: a person who logs in to the dashboard.
+- Server: one MCP endpoint (for example `petstore-prod`). A user owns many servers.
+- API: one imported OpenAPI spec with its base URL and upstream auth. A server has many APIs.
+- Tool: one API operation. It has a name (operationId), an input JSON schema, and an on/off flag.
+- Token: a secret that an MCP client uses to connect to one server.
+- Call: one tool call. It stores the time, tool, token, HTTP status, latency, and the result
+  (OK, Not found, Upstream error, Timed out).
+
+## Milestones
+Each milestone ends with working code, tests, and a short demo.
+
+1. Setup. Create the Cargo workspace, the Vite app, and the first migration. Add the two
+   Dockerfiles, the Caddyfile, `compose.yaml`, and `.env.example`. `docker compose up --build`
+   must show an empty React page at `https://localhost` and a health answer at `/api/health`.
+   Add CI that runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, the web
+   build, `docker compose config`, and both image builds.
+2. OpenAPI to tools. Parse a spec and make one tool per operation. Merge path, query, and
+   body parameters into one input schema. Test with the Petstore spec.
+3. MCP endpoint. Serve the tools of one server at `/mcp/<server>` with `rmcp`. Turn each
+   tool call into an HTTP request to the upstream API and return the response. Add a
+   timeout (10 s default). Check it with MCP Inspector.
+4. Tokens. Make MCP clients send a JWT as a bearer token. Check the signature, the expiry,
+   and the `jti` row. Show the token value once, at creation. Allow revoke.
+5. Call log and metrics. Save every call. Compute calls per minute, error rate, p50 and
+   p95 latency, and open sessions. Send new calls and metrics to the dashboard over SSE.
+6. Users and dashboard shell. Add sign-in with GitHub (OAuth) and logout. The first
+   GitHub sign-in creates the user. The server then issues the JWT cookie and the refresh
+   token. Build the side menu, the header with the MCP URL and the Copy button, and the
+   theme switcher (saved per user).
+7. Live page. Build it from the mockup with real data from milestone 5. Keep the Pause button.
+8. Tools page. List all tools with on/off switches. When a tool changes, send
+   `notifications/tools/list_changed` to the open MCP sessions. Keep at least one tool on.
+9. APIs page. Add an API from a spec URL or a file. Set the base URL and the upstream auth
+   (none, API key header, or bearer). Re-import a spec and show which tools were added or removed.
+10. Tokens page. Create, name, and revoke tokens. Show the last use of each token.
+11. All servers page. Create, rename, and delete servers. Show a short status for each.
+12. Hardening. Encrypt upstream secrets at rest. Add rate limits per token. Delete old call
+    rows after a set time.
+13. Deploy. Run the same `compose.yaml` on one host with a real `TOOLPORT_DOMAIN`.
+    Add a Postgres backup job. Ask before any change to real infrastructure.
+
+## Rules for work in this repo
+- Write all text (docs, comments, PRs, commits) in simple technical English.
+  One idea per sentence. Active voice. No metaphors.
+- Keep comments few. Explain why, not what.
+- Only mock external systems in tests (the upstream APIs and GitHub). Use a real Postgres DB
+  in tests (`#[sqlx::test]`).
+- Never store or log secrets in plain text. Never print token values after creation.
+- Do not add dummy or seed data unless asked.
+- main is PR-only. Use `feature/...`, `fix/...`, `refactor/...` branches. Keep PRs small.
+- Ask before you add a new dependency that is not in the Stack list.
+
+## Commands
+- First time: `cp .env.example .env`, then set `POSTGRES_PASSWORD` and the same password in `DATABASE_URL`.
+- Whole system: `docker compose up --build`, then open `https://localhost`.
+  Your browser warns about the local Caddy certificate the first time.
+- Database only: `docker compose up -d --wait postgres`
+- Load the env vars into the shell: `set -a; . ./.env; set +a`
+- Backend: `cargo run -p server` (`-- --help` lists the settings)
+- Checks: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
+  (the tests need Postgres and `DATABASE_URL`)
+- Frontend: `cd web && npm run dev` (Vite sends `/api`, `/auth`, `/mcp` to `localhost:8080`),
+  `npm run lint`, `npm run build`
+- CI: `.github/workflows/ci.yml` runs all the checks above, `docker compose config`, and both image builds.

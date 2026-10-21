@@ -1,0 +1,373 @@
+<title>ToolPort Theme Mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=VT323&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: switcher bar on top, then app shell = side nav + main column (KPIs, chart, call log | clients, tools). Each skin restyles the same markup. */
+:root {
+  /* calm dark (default skin) */
+  --bg: #141922; --panel: #1b2230; --panel-2: #222b3b; --line: #2c3648;
+  --fg: #dfe5ee; --muted: #8b97a9; --accent: #8ab4f8; --accent-ink: #0f1a2c;
+  --ok: #7cc9a6; --warn: #e6c27a; --bad: #ef8f8f;
+  --f-ui: "Instrument Sans", system-ui, sans-serif;
+  --f-data: "JetBrains Mono", ui-monospace, monospace;
+  --f-brand: "Instrument Sans", system-ui, sans-serif;
+  --radius: 12px; --radius-sm: 8px; --brand-size: 1.15rem;
+  color-scheme: dark;
+}
+body[data-skin="neon"] {
+  --bg: #040a06; --panel: #07120b; --panel-2: #0b1d12; --line: #15391f;
+  --fg: #c9f7d4; --muted: #5f9a6e; --accent: #39ff7a; --accent-ink: #031008;
+  --ok: #9dffbf; --warn: #ffd23f; --bad: #ff5468;
+  --f-ui: "JetBrains Mono", ui-monospace, monospace;
+  --f-data: "JetBrains Mono", ui-monospace, monospace;
+  --f-brand: "VT323", "JetBrains Mono", monospace;
+  --radius: 0px; --radius-sm: 0px; --brand-size: 1.9rem;
+  color-scheme: dark;
+}
+body[data-skin="light"] {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f6; --line: #e1e5ec;
+  --fg: #18202b; --muted: #677285; --accent: #2b59e0; --accent-ink: #ffffff;
+  --ok: #188a5b; --warn: #a86b00; --bad: #c8363c;
+  --f-ui: "Geist", system-ui, sans-serif;
+  --f-data: "Geist Mono", ui-monospace, monospace;
+  --f-brand: "Geist", system-ui, sans-serif;
+  --radius: 10px; --radius-sm: 6px; --brand-size: 1.15rem;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 var(--f-ui); padding-inline: 16px; padding-block: 16px;
+  transition: background .25s, color .25s;
+}
+body[data-skin="neon"] { font-size: 13px; }
+body[data-skin="neon"]::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px);
+}
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* skin switcher */
+.switcher { max-width: 1280px; margin: 0 auto 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.switcher p { margin: 0; color: var(--muted); font-size: 13px; }
+.skins { display: flex; gap: 6px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: calc(var(--radius-sm) + 4px); }
+.skins button { border: 0; background: transparent; padding: 6px 14px; border-radius: var(--radius-sm); cursor: pointer; color: var(--muted); }
+.skins button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+/* app shell */
+.app { max-width: 1280px; margin: 0 auto; display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+nav.side { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 14px; display: flex; flex-direction: column; gap: 22px; align-self: start; position: sticky; top: calc(16px + env(safe-area-inset-top, 0px)); }
+.brand { font: 600 var(--brand-size)/1 var(--f-brand); display: flex; align-items: center; gap: 10px; }
+.brand svg { flex: none; }
+body[data-skin="neon"] .brand { color: var(--accent); text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
+.side ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.side a { display: flex; justify-content: space-between; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--muted); text-decoration: none; }
+.side a[aria-current="page"] { background: var(--panel-2); color: var(--fg); }
+body[data-skin="neon"] .side a[aria-current="page"] { background: transparent; color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+.side a span { font-family: var(--f-data); font-size: 12px; }
+.side .group { font-size: 12px; color: var(--muted); padding: 0 10px 6px; }
+.user { margin-top: auto; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line); display: grid; place-items: center; font-size: 12px; color: var(--fg); }
+body[data-skin="neon"] .avatar { border-radius: 0; }
+
+main { display: grid; gap: 16px; min-width: 0; }
+.head { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; }
+.head h1 { margin: 0; font-size: 1.5rem; font-weight: 600; text-wrap: balance; }
+body[data-skin="neon"] .head h1 { font: 2.2rem/1 var(--f-brand); }
+body[data-skin="neon"] .head h1::before { content: "> "; color: var(--accent); }
+.head .sub { color: var(--muted); margin-top: 4px; }
+.endpoint { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 6px 6px 12px; min-width: 0; max-width: 100%; }
+.endpoint code { font: 12px var(--f-data); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn { border: 1px solid var(--line); background: var(--panel-2); border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+.stream { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 2s infinite; }
+.paused .dot { background: var(--warn); animation: none; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
+body[data-skin="neon"] .panel { border-style: solid; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent), 0 0 24px -12px var(--accent); }
+body[data-skin="light"] .panel { box-shadow: 0 1px 2px rgba(24,32,43,.04); }
+.panel h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.panel h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+body[data-skin="neon"] .panel h2 { color: var(--accent); font-weight: 400; }
+body[data-skin="neon"] .panel h2::before { content: "# "; opacity: .6; }
+
+/* KPI strip: one panel, four cells */
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); padding: 0; }
+.kpi { padding: 14px 16px; border-left: 1px solid var(--line); }
+.kpi:first-child { border-left: 0; }
+.kpi .label { color: var(--muted); font-size: 12px; }
+.kpi .value { font: 600 1.6rem/1.2 var(--f-data); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.kpi .value small { font-size: .8rem; color: var(--muted); font-weight: 400; margin-left: 2px; }
+.kpi .delta { font-size: 12px; color: var(--muted); }
+body[data-skin="neon"] .kpi .value { color: var(--ok); text-shadow: 0 0 10px color-mix(in srgb, var(--ok) 45%, transparent); }
+
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.col { display: grid; gap: 16px; min-width: 0; }
+
+/* chart */
+.chart svg { width: 100%; height: 120px; display: block; }
+.chart .axis { fill: var(--muted); font: 10px var(--f-data); }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .area { fill: color-mix(in srgb, var(--accent) 18%, transparent); }
+.chart .lineP { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+.chart .errs { fill: var(--bad); }
+.chart .end { fill: var(--accent); }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 6px; background: var(--accent); }
+.legend i.e { background: var(--bad); width: 6px; height: 6px; border-radius: 50%; }
+
+/* call log */
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; font-size: 13px; }
+td.mono, td .mono { font-family: var(--f-data); font-size: 12px; }
+td.num { text-align: right; }
+tr:last-child td { border-bottom: 0; }
+tr.new td { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } to { background: transparent; } }
+.method { font: 600 11px var(--f-data); padding: 1px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); }
+body[data-skin="neon"] .method { border-radius: 0; }
+.pill { font-size: 12px; padding: 1px 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.pill.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.pill.run { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+body[data-skin="neon"] .pill { border-radius: 0; }
+
+/* clients + tools */
+.list { list-style: none; margin: 0; padding: 0; display: grid; }
+.list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.list li:first-child { border-top: 0; padding-top: 0; }
+.list .name { font-weight: 500; }
+.list .meta { grid-column: 1; color: var(--muted); font: 12px var(--f-data); }
+.list .side-val { grid-row: 1 / span 2; grid-column: 2; align-self: center; font: 12px var(--f-data); color: var(--muted); text-align: right; }
+.tool { display: flex !important; align-items: center; justify-content: space-between; gap: 10px; }
+.tool .t { min-width: 0; }
+.tool .t div:first-child { font: 13px var(--f-data); }
+.tool .t div:last-child { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toggle { position: relative; width: 34px; height: 20px; flex: none; }
+.toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.toggle span { position: absolute; inset: 0; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); transition: background .15s; pointer-events: none; }
+.toggle span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.toggle input:checked + span { background: var(--accent); border-color: var(--accent); }
+.toggle input:checked + span::after { transform: translateX(14px); background: var(--accent-ink); }
+.toggle input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+body[data-skin="neon"] .toggle span, body[data-skin="neon"] .toggle span::after { border-radius: 0; }
+
+.note { font-size: 12px; color: var(--muted); }
+.toast { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+
+@media (max-width: 1080px) { .grid2 { grid-template-columns: 1fr; } }
+@media (max-width: 820px) {
+  .app { grid-template-columns: 1fr; }
+  nav.side { position: static; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .side ul { display: flex; flex-wrap: wrap; }
+  .side .group, .user { display: none; }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .kpi:nth-child(3) { border-left: 0; }
+  .kpi:nth-child(n+3) { border-top: 1px solid var(--line); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+
+<div class="switcher">
+  <div class="skins" role="group" aria-label="Theme">
+    <button type="button" data-skin="neon" aria-pressed="true">Neon terminal</button>
+    <button type="button" data-skin="calm" aria-pressed="false">Calm dark</button>
+    <button type="button" data-skin="light" aria-pressed="false">Clean light</button>
+  </div>
+  <p>Mockup of the Live page. The data is example data that updates by itself.</p>
+</div>
+
+<div class="app">
+  <nav class="side" aria-label="Main">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" rx="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 8h10M6 14h4M13 14h3" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/></svg>
+      ToolPort
+    </div>
+    <div>
+      <div class="group">Server: petstore-prod</div>
+      <ul>
+        <li><a href="#" aria-current="page">Live <span id="navCalls">0</span></a></li>
+        <li><a href="#">APIs <span>2</span></a></li>
+        <li><a href="#">Tools <span id="navTools">6</span></a></li>
+        <li><a href="#">Tokens <span>3</span></a></li>
+        <li><a href="#">All servers <span>4</span></a></li>
+      </ul>
+    </div>
+    <div class="user"><div class="avatar">RB</div>rbertok</div>
+  </nav>
+
+  <main>
+    <div class="head">
+      <div>
+        <h1>petstore-prod</h1>
+        <div class="sub">2 APIs bridged to MCP. <span class="stream" id="stream"><span class="dot"></span><span id="streamText">Live updates on</span></span></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;min-width:0;max-width:100%">
+        <div class="endpoint"><code id="mcpUrl">https://toolport.dev/mcp/petstore-prod</code><button class="btn" id="copy" type="button">Copy URL</button></div>
+        <button class="btn" id="pause" type="button">Pause</button>
+      </div>
+    </div>
+
+    <section class="panel kpis" aria-label="Metrics">
+      <div class="kpi"><div class="label">Calls per minute</div><div class="value" id="kCpm">0</div><div class="delta">last 60 s</div></div>
+      <div class="kpi"><div class="label">Error rate</div><div class="value" id="kErr">0<small>%</small></div><div class="delta">non-2xx and timeouts</div></div>
+      <div class="kpi"><div class="label">p95 latency</div><div class="value" id="kP95">0<small>ms</small></div><div class="delta" id="kP50">p50 0 ms</div></div>
+      <div class="kpi"><div class="label">Connected clients</div><div class="value" id="kClients">3</div><div class="delta">MCP sessions open</div></div>
+    </section>
+
+    <div class="grid2">
+      <div class="col">
+        <section class="panel chart">
+          <h2>Calls over time <small class="legend"><span><i></i>calls / 5 s</span><span><i class="e"></i>errors</span></small></h2>
+          <svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Calls per 5 seconds over the last 5 minutes"></svg>
+        </section>
+        <section class="panel">
+          <h2>Call log <small>newest first</small></h2>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>Time</th><th>Tool</th><th>Client</th><th>Status</th><th class="num">HTTP</th><th class="num">Latency</th></tr></thead>
+              <tbody id="log"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <div class="col">
+        <section class="panel">
+          <h2>Connected clients <small id="clientCount">3 open</small></h2>
+          <ul class="list" id="clients"></ul>
+        </section>
+        <section class="panel">
+          <h2>Tools <small>turn off to hide from agents</small></h2>
+          <ul class="list" id="tools"></ul>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+document.body.dataset.skin = "neon";
+const tools = [
+  { name: "listPets", method: "GET", path: "/pets", on: true, weight: 5, ms: 90 },
+  { name: "getPetById", method: "GET", path: "/pets/{petId}", on: true, weight: 6, ms: 70 },
+  { name: "createPet", method: "POST", path: "/pets", on: true, weight: 2, ms: 160 },
+  { name: "updatePet", method: "PUT", path: "/pets/{petId}", on: true, weight: 1, ms: 180 },
+  { name: "deletePet", method: "DELETE", path: "/pets/{petId}", on: false, weight: 1, ms: 120 },
+  { name: "getInventory", method: "GET", path: "/store/inventory", on: true, weight: 2, ms: 240 },
+];
+const clients = [
+  { name: "Claude Desktop", meta: "token tp_8f2c…", since: Date.now() - 42 * 60e3 },
+  { name: "Cursor", meta: "token tp_19ab…", since: Date.now() - 7 * 60e3 },
+  { name: "MCP Inspector", meta: "token tp_c04e…", since: Date.now() - 50e3 },
+];
+const calls = [];          // { t, ms, err }
+const buckets = Array.from({ length: 60 }, () => ({ n: Math.round(2 + Math.random() * 4), e: Math.random() < .15 ? 1 : 0 }));
+let paused = false, total = 0;
+
+const $ = id => document.getElementById(id);
+const fmtTime = d => d.toTimeString().slice(0, 8);
+const ago = ms => { const s = Math.round(ms / 1000); return s < 60 ? s + " s" : Math.round(s / 60) + " min"; };
+const pick = () => {
+  const on = tools.filter(t => t.on);
+  let r = Math.random() * on.reduce((a, t) => a + t.weight, 0);
+  for (const t of on) { if ((r -= t.weight) < 0) return t; }
+  return on[0];
+};
+
+function renderTools() {
+  $("tools").innerHTML = tools.map((t, i) => `
+    <li class="tool"><div class="t"><div>${t.name}</div><div><span class="method">${t.method}</span> ${t.path}</div></div>
+    <label class="toggle"><input type="checkbox" id="tool-${i}" ${t.on ? "checked" : ""} aria-label="Enable ${t.name}"><span></span></label></li>`).join("");
+  $("navTools").textContent = tools.filter(t => t.on).length;
+}
+function renderClients() {
+  $("clients").innerHTML = clients.map(c => `
+    <li><div class="name">${c.name}</div><div class="meta">${c.meta}</div><div class="side-val">${ago(Date.now() - c.since)}</div></li>`).join("");
+  $("clientCount").textContent = clients.length + " open";
+  $("kClients").textContent = clients.length;
+}
+function renderChart() {
+  const W = 600, H = 120, pad = 18, max = Math.max(8, ...buckets.map(b => b.n));
+  const x = i => (i / (buckets.length - 1)) * W, y = v => H - pad - (v / max) * (H - pad - 6);
+  const pts = buckets.map((b, i) => `${x(i).toFixed(1)},${y(b.n).toFixed(1)}`).join(" ");
+  const mid = Math.round(max / 2);
+  let s = `<line class="grid" x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}"/><line class="grid" x1="0" x2="${W}" y1="${y(mid)}" y2="${y(mid)}" stroke-dasharray="2 4"/>`;
+  s += `<text class="axis" x="4" y="${y(mid) - 4}">${mid}</text><text class="axis" x="4" y="${H - 4}">5 min ago</text><text class="axis" x="${W - 4}" y="${H - 4}" text-anchor="end">now</text>`;
+  s += `<polygon class="area" points="0,${y(0)} ${pts} ${W},${y(0)}"/><polyline class="lineP" points="${pts}"/>`;
+  buckets.forEach((b, i) => { if (b.e) s += `<circle class="errs" cx="${x(i)}" cy="${y(b.n)}" r="3"/>`; });
+  const last = buckets.length - 1;
+  s += `<circle class="end" cx="${x(last) - 3}" cy="${y(buckets[last].n)}" r="3.5"/>`;
+  $("chart").innerHTML = s;
+}
+function renderKpis() {
+  const now = Date.now(), recent = calls.filter(c => now - c.t < 60e3);
+  const cpm = buckets.slice(-12).reduce((a, b) => a + b.n, 0);
+  const errs = recent.filter(c => c.err).length;
+  const lat = recent.map(c => c.ms).sort((a, b) => a - b);
+  const q = p => lat.length ? lat[Math.min(lat.length - 1, Math.floor(p * lat.length))] : 0;
+  $("kCpm").textContent = cpm;
+  $("kErr").innerHTML = (recent.length ? (100 * errs / recent.length).toFixed(1) : "0.0") + "<small>%</small>";
+  $("kP95").innerHTML = q(.95) + "<small>ms</small>";
+  $("kP50").textContent = "p50 " + q(.5) + " ms";
+}
+function addCall() {
+  const tool = pick(), client = clients[Math.floor(Math.random() * clients.length)];
+  const roll = Math.random();
+  const http = roll < .06 ? 502 : roll < .12 ? 404 : tool.method === "POST" ? 201 : 200;
+  const timeout = roll > .985;
+  const ms = timeout ? 10000 : Math.round(tool.ms * (0.6 + Math.random() * 1.2));
+  const err = timeout || http >= 400;
+  calls.push({ t: Date.now(), ms, err }); total++;
+  buckets[buckets.length - 1].n++; if (err) buckets[buckets.length - 1].e = 1;
+  const status = timeout ? `<span class="pill bad">Timed out</span>` : http >= 500 ? `<span class="pill bad">Upstream error</span>` : http >= 400 ? `<span class="pill warn">Not found</span>` : `<span class="pill ok">OK</span>`;
+  const tr = document.createElement("tr"); tr.className = "new";
+  tr.innerHTML = `<td class="mono">${fmtTime(new Date())}</td><td class="mono">${tool.name}</td><td>${client.name}</td><td>${status}</td><td class="num mono">${timeout ? "–" : http}</td><td class="num mono">${ms.toLocaleString()} ms</td>`;
+  const log = $("log"); log.prepend(tr); while (log.children.length > 10) log.lastChild.remove();
+  $("navCalls").textContent = total;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 2200); }
+
+// seed some rows so the first frame shows a working log
+for (let i = 0; i < 8; i++) addCall();
+renderTools(); renderClients(); renderChart(); renderKpis();
+
+setInterval(() => { if (!paused) { addCall(); renderKpis(); renderChart(); } }, 1400);
+setInterval(() => { if (!paused) { buckets.shift(); buckets.push({ n: 0, e: 0 }); renderChart(); renderClients(); } }, 5000);
+
+$("tools").addEventListener("change", e => {
+  const i = +e.target.id.split("-")[1]; tools[i].on = e.target.checked;
+  if (!tools.some(t => t.on)) { tools[i].on = true; e.target.checked = true; toast("Keep at least one tool on."); return; }
+  renderTools(); toast(`${tools[i].name} ${tools[i].on ? "turned on" : "turned off"}. Clients got the new tool list.`);
+});
+$("pause").addEventListener("click", () => {
+  paused = !paused; $("pause").textContent = paused ? "Resume" : "Pause";
+  $("stream").classList.toggle("paused", paused); $("streamText").textContent = paused ? "Live updates paused" : "Live updates on";
+});
+$("copy").addEventListener("click", () => {
+  const url = $("mcpUrl").textContent;
+  navigator.clipboard?.writeText(url).then(() => toast("Copied the MCP URL."), () => {
+    const r = document.createRange(); r.selectNodeContents($("mcpUrl")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast("Press Cmd+C to copy.");
+  });
+});
+document.querySelectorAll(".skins button").forEach(b => b.addEventListener("click", () => {
+  const skin = b.dataset.skin;
+  if (skin === "calm") delete document.body.dataset.skin; else document.body.dataset.skin = skin;
+  document.querySelectorAll(".skins button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  try { localStorage.setItem("tp-skin-v2", skin); } catch (_) {}
+}));
+try { const s = localStorage.getItem("tp-skin-v2"); if (s) document.querySelector(`.skins button[data-skin="${s}"]`)?.click(); } catch (_) {}
+</script>

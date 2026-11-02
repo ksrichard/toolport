@@ -6,7 +6,7 @@ use clap::Parser;
 use reqwest::Url;
 use server::{
     error::error_chain,
-    import::{ImportError, ImportRequest, import_spec},
+    import::{ImportError, ImportRequest, Owner, import_spec},
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -83,7 +83,7 @@ async fn run(args: Args) -> Result<(), CliError> {
     let report = import_spec(
         &pool,
         ImportRequest {
-            owner_login: &args.owner,
+            owner: Owner::Login(&args.owner),
             server: &args.server,
             api_name: args.api_name.as_deref(),
             spec_text: &spec_text,

@@ -30,6 +30,9 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # `cargo test` writes the TypeScript API types. Commit them after a change to the Rust types.
+      - name: Check that web/src/types is up to date
+        run: git add -N web/src/types && git diff --exit-code -- web/src/types
 
   web:
     runs-on: ubuntu-latest

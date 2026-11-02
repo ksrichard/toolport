@@ -3,3 +3,6 @@ node_modules/
 /web/dist
 .env
 .DS_Store
+
+# Personal Claude Code settings
+.claude/settings.local.json

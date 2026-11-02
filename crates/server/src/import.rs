@@ -4,9 +4,16 @@ use reqwest::Url;
 use sqlx::{PgPool, types::Json};
 use toolport_core::{SkippedOperation, SpecError, convert, parse_spec, server_name};
 
+/// The CLI knows the owner by GitHub login. The dashboard knows the signed-in user id.
+#[derive(Debug, Clone, Copy)]
+pub enum Owner<'a> {
+    Login(&'a str),
+    UserId(i64),
+}
+
 pub struct ImportRequest<'a> {
-    /// The GitHub login of the server owner. The user must have signed in once.
-    pub owner_login: &'a str,
+    /// The user must have signed in once.
+    pub owner: Owner<'a>,
     pub server: &'a str,
     /// The default is the spec title.
     pub api_name: Option<&'a str>,
@@ -32,15 +39,15 @@ pub enum ImportError {
         "the server name {0} is not valid, use 1 to 63 lowercase letters, digits, and `-`, and start with a letter or digit"
     )]
     InvalidServerName(String),
-    #[error("the spec is not valid")]
+    #[error(transparent)]
     Spec(#[from] SpecError),
     #[error("the spec has no operation that can become a tool")]
     NoTools,
-    #[error("the spec has no absolute base URL, set one with --base-url")]
+    #[error("the spec has no absolute base URL, set a base URL")]
     MissingBaseUrl,
     #[error("the base URL {0} must start with http:// or https://")]
     BadBaseUrl(Url),
-    #[error("no user with the GitHub login {0} exists, sign in to the dashboard once first")]
+    #[error("the owner {0} does not exist, sign in to the dashboard once first")]
     UnknownOwner(String),
     #[error("the server {0} belongs to another user")]
     ServerOwnedByOther(String),
@@ -79,11 +86,26 @@ pub async fn import_spec(
 
     let mut tx = pool.begin().await?;
 
-    let owner_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE github_login = $1")
-        .bind(request.owner_login)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ImportError::UnknownOwner(request.owner_login.to_owned()))?;
+    let owner_id: Option<i64> = match request.owner {
+        Owner::Login(login) => {
+            sqlx::query_scalar("SELECT id FROM users WHERE github_login = $1")
+                .bind(login)
+                .fetch_optional(&mut *tx)
+                .await?
+        }
+        Owner::UserId(id) => {
+            sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?
+        }
+    };
+    let owner_id = owner_id.ok_or_else(|| {
+        ImportError::UnknownOwner(match request.owner {
+            Owner::Login(login) => login.to_owned(),
+            Owner::UserId(id) => format!("with id {id}"),
+        })
+    })?;
 
     // The no-op update makes ON CONFLICT return the existing row and lock it until commit.
     // `xmax = 0` is true only for a row that this statement inserted.

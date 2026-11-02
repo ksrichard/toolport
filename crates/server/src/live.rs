@@ -19,12 +19,14 @@ use axum::{
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
+use ts_rs::TS;
 
 use crate::{
     auth::AuthUser,
     calls::{self, Bucket, CallRecord, Metrics},
     error::{ApiError, error_chain},
     mcp_tokens::McpCaller,
+    servers::owned_server_id,
     state::AppState,
 };
 
@@ -54,12 +56,15 @@ struct ClientSeen {
     last_seen_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
 pub struct ConnectedClient {
     /// The name from the MCP `initialize` request, for example `claude-ai`.
     pub client_name: Option<String>,
     pub token_name: String,
+    #[ts(type = "number")]
     pub since_ms: i64,
+    #[ts(type = "number")]
     pub last_seen_ms: i64,
 }
 
@@ -133,7 +138,8 @@ fn now_ms() -> i64 {
 }
 
 /// The first event of a stream. It is also sent again when the stream falls behind.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct Snapshot {
     metrics: Metrics,
     clients: Vec<ConnectedClient>,
@@ -143,7 +149,8 @@ struct Snapshot {
     calls: Vec<CallRecord>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 struct MetricsUpdate {
     metrics: Metrics,
     clients: Vec<ConnectedClient>,
@@ -169,14 +176,7 @@ async fn live(
     auth: AuthUser,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let server_id: i64 =
-        sqlx::query_scalar("SELECT id FROM servers WHERE name = $1 AND user_id = $2")
-            .bind(&name)
-            .bind(auth.user_id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(ApiError::Database)?
-            .ok_or(ApiError::NotFound)?;
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
 
     // Subscribe before the snapshot query, so no call is lost between the two.
     let calls = state.live.subscribe();

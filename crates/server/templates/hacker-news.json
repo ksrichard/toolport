@@ -1,0 +1,43 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Hacker News", "version": "1.0.0" },
+  "servers": [{ "url": "https://hacker-news.firebaseio.com/v0" }],
+  "paths": {
+    "/topstories.json": {
+      "get": {
+        "operationId": "getTopStories",
+        "summary": "Get the ids of the top stories",
+        "description": "Returns up to 500 item ids, the best first. Use getItem to read each story.",
+        "responses": { "200": { "description": "The story ids" } }
+      }
+    },
+    "/newstories.json": {
+      "get": {
+        "operationId": "getNewStories",
+        "summary": "Get the ids of the newest stories",
+        "responses": { "200": { "description": "The story ids" } }
+      }
+    },
+    "/item/{id}.json": {
+      "get": {
+        "operationId": "getItem",
+        "summary": "Get a story, comment, job, or poll",
+        "description": "Returns the title, URL, score, author, time, and the ids of the child comments.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "The item" } }
+      }
+    },
+    "/user/{id}.json": {
+      "get": {
+        "operationId": "getUser",
+        "summary": "Get a user profile",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "description": "The user name. It is case-sensitive.", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "The user" } }
+      }
+    }
+  }
+}

@@ -141,9 +141,13 @@ Each milestone ends with working code, tests, and a short demo.
    build, `docker compose config`, and both image builds.
 2. OpenAPI to tools. Parse a spec and make one tool per operation. Merge path, query, and
    body parameters into one input schema. Test with the Petstore spec.
+   Status: done. Limits: JSON specs only (YAML needs a new crate). Only JSON request bodies;
+   an operation with a required non-JSON body is skipped, an optional one loses its body.
 3. MCP endpoint. Serve the tools of one server at `/mcp/<server>` with `rmcp`. Turn each
    tool call into an HTTP request to the upstream API and return the response. Add a
    timeout (10 s default). Check it with MCP Inspector.
+   Status: done. Until the APIs and servers pages exist, the `import-spec` binary loads a spec
+   into a server. A re-import of an API replaces its tools and turns them all on again.
 4. Tokens. Make MCP clients send a JWT as a bearer token. Check the signature, the expiry,
    and the `jti` row. Show the token value once, at creation. Allow revoke.
 5. Call log and metrics. Save every call. Compute calls per minute, error rate, p50 and
@@ -184,6 +188,8 @@ Each milestone ends with working code, tests, and a short demo.
 - Database only: `docker compose up -d --wait postgres`
 - Load the env vars into the shell: `set -a; . ./.env; set +a`
 - Backend: `cargo run -p server` (`-- --help` lists the settings)
+- Import a spec into a server (dev tool): `cargo run -p server --bin import-spec -- --owner <github-login>
+  --server <name> --spec <file-or-url> [--base-url <url>]`. The owner must have signed in once.
 - Checks: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
   (the tests need Postgres and `DATABASE_URL`)
 - Frontend: `cd web && npm run dev` (Vite sends `/api`, `/auth`, `/mcp` to `localhost:8080`),

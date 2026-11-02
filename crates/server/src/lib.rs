@@ -1,7 +1,9 @@
 pub mod auth;
+pub mod calls;
 pub mod config;
 pub mod error;
 pub mod import;
+pub mod live;
 pub mod mcp;
 pub mod mcp_tokens;
 pub mod state;
@@ -16,6 +18,7 @@ pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .merge(users::routes())
+        .merge(live::routes())
         .fallback(|| async { ApiError::NotFound });
     Router::new()
         .nest("/api", api)

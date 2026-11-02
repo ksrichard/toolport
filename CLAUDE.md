@@ -154,6 +154,10 @@ Each milestone ends with working code, tests, and a short demo.
    revokes tokens. A missing token, a bad token, and an unknown server all get the same 401.
 5. Call log and metrics. Save every call. Compute calls per minute, error rate, p50 and
    p95 latency, and open sessions. Send new calls and metrics to the dashboard over SSE.
+   Status: done. `GET /api/servers/{name}/live` sends `snapshot`, `call`, and `metrics`
+   events. It needs the Bearer JWT, so the dashboard reads it with `fetch`, not `EventSource`.
+   A "connected client" is a token and client name with an MCP request in the last 2 minutes.
+   Only calls that reach the upstream API are saved.
 6. Users and dashboard shell. Add sign-in with GitHub (OAuth) and logout. The first
    GitHub sign-in creates the user. The server then sets the refresh cookie, and the app gets
    a Bearer JWT from `/auth/refresh`. Build the side menu, the header with the MCP URL and the

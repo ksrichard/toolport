@@ -14,6 +14,7 @@ use http_body_util::BodyExt;
 use reqwest::Url;
 use serde_json::{Value, json};
 use server::{
+    calls::{self, CallResult},
     import::{ImportRequest, import_spec},
     mcp_tokens,
     state::AppState,
@@ -546,4 +547,187 @@ async fn token_needs_a_known_server_and_a_name(pool: PgPool) {
     ));
     let empty = mcp_tokens::create(&pool, keys, "pets", "  ", ttl).await;
     assert!(matches!(empty, Err(mcp_tokens::TokenError::EmptyName)));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn each_call_is_saved(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 200).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    client.call("getPet", json!({ "id": "1" })).await;
+    client.call("getPet", json!({ "id": "404" })).await;
+    client.call("slow", json!({})).await;
+    // A call with bad arguments never reaches the upstream API, so it is not saved.
+    client.call("getPet", json!({})).await;
+
+    let calls = calls::recent(&pool, 1, 10).await.unwrap();
+    let rows: Vec<_> = calls
+        .iter()
+        .map(|c| (c.tool.as_str(), c.result, c.http_status))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("slow", CallResult::TimedOut, None),
+            ("getPet", CallResult::NotFound, Some(404)),
+            ("getPet", CallResult::Ok, Some(200)),
+        ]
+    );
+    assert_eq!(calls[0].client_name.as_deref(), Some("test"));
+    assert_eq!(calls[0].token_name.as_deref(), Some("test"));
+    assert!(calls[0].latency_ms >= 200);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn metrics_use_the_last_minute(pool: PgPool) {
+    let (_, state) = setup(pool.clone(), 10_000).await;
+    token(&state, "pets").await;
+    let token_id: i64 = sqlx::query_scalar("SELECT id FROM mcp_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    for (latency_ms, result) in [
+        (10, CallResult::Ok),
+        (20, CallResult::Ok),
+        (30, CallResult::Ok),
+        (400, CallResult::UpstreamError),
+    ] {
+        let call = calls::NewCall {
+            server_id: 1,
+            token_id,
+            client_name: None,
+            tool: "getPet",
+            result,
+            http_status: Some(200),
+            latency_ms,
+        };
+        calls::record(&pool, call).await.unwrap();
+    }
+    // An old call is outside the window and must not count.
+    sqlx::query(
+        "INSERT INTO calls (server_id, tool, result, latency_ms, created_at)
+         VALUES (1, 'old', 'ok', 9999, now() - interval '2 minutes')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let metrics = calls::metrics(&pool, 1).await.unwrap();
+    assert_eq!(
+        metrics,
+        calls::Metrics {
+            calls_per_minute: 4,
+            error_rate: 0.25,
+            p50_ms: Some(20),
+            p95_ms: Some(400),
+        }
+    );
+    let buckets = calls::buckets(&pool, 1).await.unwrap();
+    assert_eq!(buckets.iter().map(|b| b.calls).sum::<i64>(), 5);
+    assert_eq!(buckets.iter().map(|b| b.errors).sum::<i64>(), 1);
+    assert!(buckets.iter().all(|b| b.start_ms % 5000 == 0));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn empty_window_has_no_latency(pool: PgPool) {
+    let (_, _) = setup(pool.clone(), 10_000).await;
+    let metrics = calls::metrics(&pool, 1).await.unwrap();
+    assert_eq!(metrics.calls_per_minute, 0);
+    assert_eq!(metrics.error_rate, 0.0);
+    assert_eq!(metrics.p50_ms, None);
+}
+
+/// Reads server-sent events from a streaming response body.
+struct SseReader {
+    body: Body,
+    buffer: String,
+}
+
+impl SseReader {
+    fn new(response: Response) -> Self {
+        Self {
+            body: response.into_body(),
+            buffer: String::new(),
+        }
+    }
+
+    /// Returns the next event name and its JSON data. Keep-alive comments are skipped.
+    async fn next(&mut self) -> (String, Value) {
+        loop {
+            while let Some(end) = self.buffer.find("\n\n") {
+                let block: String = self.buffer.drain(..end + 2).collect();
+                let mut name = None;
+                let mut data = String::new();
+                for line in block.lines() {
+                    if let Some(value) = line.strip_prefix("event:") {
+                        name = Some(value.trim().to_owned());
+                    } else if let Some(value) = line.strip_prefix("data:") {
+                        data.push_str(value.trim());
+                    }
+                }
+                if let Some(name) = name {
+                    return (name, serde_json::from_str(&data).unwrap());
+                }
+            }
+            let frame = tokio::time::timeout(Duration::from_secs(5), self.body.frame())
+                .await
+                .expect("no SSE event within 5 s")
+                .expect("the stream ended")
+                .unwrap();
+            if let Ok(bytes) = frame.into_data() {
+                self.buffer.push_str(std::str::from_utf8(&bytes).unwrap());
+            }
+        }
+    }
+}
+
+async fn open_live(app: &Router, server: &str, access: Option<&str>) -> Response {
+    let mut request = Request::get(format!("/api/servers/{server}/live"));
+    if let Some(access) = access {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {access}"));
+    }
+    app.clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn live_stream_sends_a_snapshot_and_then_new_calls(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    client.call("getPet", json!({ "id": "1" })).await;
+
+    let access = state.auth.jwt.issue_access(1).unwrap();
+    let response = open_live(&app, "pets", Some(&access)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+    let mut events = SseReader::new(response);
+
+    let (name, snapshot) = events.next().await;
+    assert_eq!(name, "snapshot");
+    assert_eq!(snapshot["calls"][0]["tool"], "getPet");
+    assert_eq!(snapshot["metrics"]["calls_per_minute"], 1);
+    assert_eq!(snapshot["clients"][0]["client_name"], "test");
+    assert_eq!(snapshot["clients"][0]["token_name"], "test");
+
+    client.call("getPet", json!({ "id": "404" })).await;
+    let (name, call) = events.next().await;
+    assert_eq!(name, "call");
+    assert_eq!(call["result"], "not_found");
+    assert_eq!(call["http_status"], 404);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn live_stream_needs_the_owner(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let response = open_live(&app, "pets", None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let other_user = common::create_user(&pool, 2, "mallory").await;
+    let access = state.auth.jwt.issue_access(other_user).unwrap();
+    let response = open_live(&app, "pets", Some(&access)).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

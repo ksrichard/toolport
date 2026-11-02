@@ -1985,6 +1985,7 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "toolport-core",
  "tower",
  "tracing",

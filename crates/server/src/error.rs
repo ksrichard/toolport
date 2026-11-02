@@ -44,6 +44,8 @@ pub enum ApiError {
     Database(#[source] sqlx::Error),
     #[error("an internal error happened")]
     TokenSigning(#[source] jsonwebtoken::errors::Error),
+    #[error("an internal error happened")]
+    Encode(#[source] axum::Error),
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -60,7 +62,9 @@ impl ApiError {
             Self::InvalidBody(_) => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::DatabaseUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Database(_) | Self::TokenSigning(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Database(_) | Self::TokenSigning(_) | Self::Encode(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
@@ -70,7 +74,7 @@ impl ApiError {
             Self::InvalidBody(_) => "invalid_body",
             Self::NotFound => "not_found",
             Self::DatabaseUnavailable(_) => "database_unavailable",
-            Self::Database(_) | Self::TokenSigning(_) => "internal_error",
+            Self::Database(_) | Self::TokenSigning(_) | Self::Encode(_) => "internal_error",
         }
     }
 }

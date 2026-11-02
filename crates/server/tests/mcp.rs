@@ -15,6 +15,7 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use server::{
     import::{ImportRequest, import_spec},
+    mcp_tokens,
     state::AppState,
 };
 use sqlx::PgPool;
@@ -103,12 +104,21 @@ async fn import(pool: &PgPool, server: &str, spec: &str, base_url: Url) {
 }
 
 /// A user, the server `pets` with the fake upstream API, and the app.
-async fn setup(pool: PgPool, timeout_ms: u64) -> Router {
+async fn setup(pool: PgPool, timeout_ms: u64) -> (Router, AppState) {
     common::create_user(&pool, 1, "octocat").await;
     import(&pool, "pets", UPSTREAM_SPEC, fake_upstream().await).await;
     let mut config = common::config(&common::fake_github().await);
     config.upstream_timeout_ms = timeout_ms;
-    server::app(AppState::new(pool, &config).unwrap())
+    let state = AppState::new(pool, &config).unwrap();
+    (server::app(state.clone()), state)
+}
+
+async fn token(state: &AppState, server: &str) -> String {
+    let ttl = Duration::from_secs(3600);
+    mcp_tokens::create(&state.pool, &state.auth.jwt, server, "test", ttl)
+        .await
+        .unwrap()
+        .value
 }
 
 /// The MCP sessions live in the router, so all requests of one test must use the same router.
@@ -116,6 +126,7 @@ async fn post_mcp(
     app: &Router,
     path: &str,
     host: &str,
+    token: Option<&str>,
     session: Option<&str>,
     body: Value,
 ) -> Response {
@@ -123,6 +134,9 @@ async fn post_mcp(
         .header(header::HOST, host)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream");
+    if let Some(token) = token {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
     if let Some(session) = session {
         request = request.header(SESSION_HEADER, session);
     }
@@ -148,16 +162,24 @@ async fn first_message(response: Response) -> Value {
 struct Client {
     app: Router,
     path: String,
+    token: String,
     session: String,
 }
 
 impl Client {
-    async fn connect(app: &Router, server: &str) -> Self {
+    /// Creates a token for the server and opens a session with it.
+    async fn connect(app: &Router, state: &AppState, server: &str) -> Self {
+        let token = token(state, server).await;
+        Self::connect_with(app, server, token).await
+    }
+
+    async fn connect_with(app: &Router, server: &str, token: String) -> Self {
         let path = format!("/mcp/{server}");
         let response = post_mcp(
             app,
             &path,
             HOST,
+            Some(&token),
             None,
             json!({
                 "jsonrpc": "2.0",
@@ -183,6 +205,7 @@ impl Client {
             app,
             &path,
             HOST,
+            Some(&token),
             Some(&session),
             json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
         )
@@ -191,14 +214,26 @@ impl Client {
         Self {
             app: app.clone(),
             path,
+            token,
             session,
         }
     }
 
-    async fn request(&self, method: &str, params: Value) -> Value {
+    async fn send(&self, method: &str, params: Value) -> Response {
         let body = json!({ "jsonrpc": "2.0", "id": 2, "method": method, "params": params });
-        let response = post_mcp(&self.app, &self.path, HOST, Some(&self.session), body).await;
-        first_message(response).await
+        post_mcp(
+            &self.app,
+            &self.path,
+            HOST,
+            Some(&self.token),
+            Some(&self.session),
+            body,
+        )
+        .await
+    }
+
+    async fn request(&self, method: &str, params: Value) -> Value {
+        first_message(self.send(method, params).await).await
     }
 
     async fn tool_names(&self) -> Vec<String> {
@@ -233,8 +268,8 @@ fn text(result: &Value) -> &str {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn tools_list_shows_the_server_tools_in_spec_order(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let list = client.request("tools/list", json!({})).await;
     let tools = list["result"]["tools"].as_array().unwrap();
     let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -245,8 +280,8 @@ async fn tools_list_shows_the_server_tools_in_spec_order(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn call_fills_the_path_the_query_and_the_headers(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let result = client
         .call(
             "getPet",
@@ -264,8 +299,8 @@ async fn call_fills_the_path_the_query_and_the_headers(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn call_sends_the_json_body(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let result = client
         .call("createPet", json!({ "body": { "name": "Rex" } }))
         .await;
@@ -278,8 +313,8 @@ async fn call_sends_the_json_body(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn upstream_error_status_is_a_tool_error(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let result = client.call("getPet", json!({ "id": "404" })).await;
     assert_eq!(result["isError"], true);
     assert_eq!(
@@ -290,8 +325,8 @@ async fn upstream_error_status_is_a_tool_error(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn slow_upstream_times_out(pool: PgPool) {
-    let app = setup(pool, 200).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 200).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let result = client.call("slow", json!({})).await;
     assert_eq!(result["isError"], true);
     assert_eq!(
@@ -302,8 +337,8 @@ async fn slow_upstream_times_out(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn large_response_is_cut(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let result = client.call("big", json!({})).await;
     assert_eq!(result["isError"], false);
     let body = text(&result);
@@ -326,9 +361,10 @@ async fn unreachable_upstream_is_a_tool_error(pool: PgPool) {
         .port();
     let base_url = Url::parse(&format!("http://127.0.0.1:{port}/v1")).unwrap();
     import(&pool, "pets", UPSTREAM_SPEC, base_url).await;
-    let app = server::app(common::state(pool).await);
+    let state = common::state(pool).await;
+    let app = server::app(state.clone());
 
-    let client = Client::connect(&app, "pets").await;
+    let client = Client::connect(&app, &state, "pets").await;
     let result = client.call("slow", json!({})).await;
     assert_eq!(result["isError"], true);
     assert_eq!(text(&result), "the upstream API cannot be reached");
@@ -336,8 +372,8 @@ async fn unreachable_upstream_is_a_tool_error(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn missing_argument_is_an_invalid_params_error(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let error = client.call("getPet", json!({})).await;
     assert_eq!(error["code"], -32602);
     assert_eq!(error["message"], "the argument id is required");
@@ -345,16 +381,16 @@ async fn missing_argument_is_an_invalid_params_error(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn dot_dot_path_argument_is_rejected(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let error = client.call("getPet", json!({ "id": ".." })).await;
     assert_eq!(error["code"], -32602);
 }
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn unknown_tool_is_an_invalid_params_error(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let client = Client::connect(&app, "pets").await;
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
     let error = client.call("nope", json!({})).await;
     assert_eq!(error["code"], -32602);
     assert_eq!(error["message"], "the tool nope does not exist");
@@ -362,12 +398,12 @@ async fn unknown_tool_is_an_invalid_params_error(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn disabled_tool_is_hidden_and_cannot_be_called(pool: PgPool) {
-    let app = setup(pool.clone(), 10_000).await;
+    let (app, state) = setup(pool.clone(), 10_000).await;
     sqlx::query("UPDATE tools SET enabled = false WHERE name = 'slow'")
         .execute(&pool)
         .await
         .unwrap();
-    let client = Client::connect(&app, "pets").await;
+    let client = Client::connect(&app, &state, "pets").await;
     assert_eq!(client.tool_names().await, ["getPet", "createPet", "big"]);
     let error = client.call("slow", json!({})).await;
     assert_eq!(error["message"], "the tool slow does not exist");
@@ -375,7 +411,7 @@ async fn disabled_tool_is_hidden_and_cannot_be_called(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn each_server_shows_only_its_own_tools(pool: PgPool) {
-    let app = setup(pool.clone(), 10_000).await;
+    let (app, state) = setup(pool.clone(), 10_000).await;
     let other_spec = json!({
         "openapi": "3.0.3",
         "info": { "title": "Other", "version": "1" },
@@ -384,8 +420,8 @@ async fn each_server_shows_only_its_own_tools(pool: PgPool) {
     .to_string();
     import(&pool, "other", &other_spec, fake_upstream().await).await;
 
-    let pets = Client::connect(&app, "pets").await;
-    let other = Client::connect(&app, "other").await;
+    let pets = Client::connect(&app, &state, "pets").await;
+    let other = Client::connect(&app, &state, "other").await;
     assert_eq!(
         pets.tool_names().await,
         ["getPet", "createPet", "slow", "big"]
@@ -396,33 +432,118 @@ async fn each_server_shows_only_its_own_tools(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
-async fn unknown_server_gives_a_json_404(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
-    let response = post_mcp(
-        &app,
-        "/mcp/nope",
-        HOST,
-        None,
-        json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_eq!(
-        common::json_body(response).await["error"],
-        "mcp_server_not_found"
-    );
-}
-
-#[sqlx::test(migrations = "../../migrations")]
 async fn unknown_host_is_rejected(pool: PgPool) {
-    let app = setup(pool, 10_000).await;
+    let (app, state) = setup(pool, 10_000).await;
+    let token = token(&state, "pets").await;
     let response = post_mcp(
         &app,
         "/mcp/pets",
         "evil.example",
+        Some(&token),
         None,
         json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }),
     )
     .await;
     assert!(response.status().is_client_error(), "{}", response.status());
+}
+
+async fn initialize_with(app: &Router, server: &str, token: Option<&str>) -> Response {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "test", "version": "0" },
+        },
+    });
+    post_mcp(app, &format!("/mcp/{server}"), HOST, token, None, body).await
+}
+
+async fn assert_unauthorized(response: Response) {
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    assert_eq!(common::json_body(response).await["error"], "unauthorized");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn request_without_a_token_gets_401(pool: PgPool) {
+    let (app, _) = setup(pool, 10_000).await;
+    assert_unauthorized(initialize_with(&app, "pets", None).await).await;
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn bad_tokens_get_401(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    assert_unauthorized(initialize_with(&app, "pets", Some("not-a-jwt")).await).await;
+    // A dashboard token has another audience.
+    let access = state.auth.jwt.issue_access(1).unwrap();
+    assert_unauthorized(initialize_with(&app, "pets", Some(&access)).await).await;
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn token_opens_only_its_own_server(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    import(&pool, "other", UPSTREAM_SPEC, fake_upstream().await).await;
+    let other_token = token(&state, "other").await;
+    assert_unauthorized(initialize_with(&app, "pets", Some(&other_token)).await).await;
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn unknown_server_looks_the_same_as_a_bad_token(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let token = token(&state, "pets").await;
+    assert_unauthorized(initialize_with(&app, "nope", Some(&token)).await).await;
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn revoke_stops_an_open_session_at_once(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    assert_eq!(client.tool_names().await.len(), 4);
+
+    let tokens = mcp_tokens::list(&pool, "pets").await.unwrap();
+    assert!(mcp_tokens::revoke(&pool, tokens[0].id).await.unwrap());
+    assert_unauthorized(client.send("tools/list", json!({})).await).await;
+    // A second revoke finds no active token.
+    assert!(!mcp_tokens::revoke(&pool, tokens[0].id).await.unwrap());
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn expired_token_row_gets_401(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let token = token(&state, "pets").await;
+    sqlx::query("UPDATE mcp_tokens SET expires_at = now() - interval '1 second'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_unauthorized(initialize_with(&app, "pets", Some(&token)).await).await;
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn use_of_a_token_sets_last_used(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let token = token(&state, "pets").await;
+    let before = mcp_tokens::list(&pool, "pets").await.unwrap();
+    assert_eq!(before[0].last_used_at, None);
+    assert!(!before[0].revoked);
+
+    Client::connect_with(&app, "pets", token).await;
+    let after = mcp_tokens::list(&pool, "pets").await.unwrap();
+    assert!(after[0].last_used_at.is_some());
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn token_needs_a_known_server_and_a_name(pool: PgPool) {
+    let (_, state) = setup(pool.clone(), 10_000).await;
+    let ttl = Duration::from_secs(60);
+    let keys = &state.auth.jwt;
+    let unknown = mcp_tokens::create(&pool, keys, "nope", "x", ttl).await;
+    assert!(matches!(
+        unknown,
+        Err(mcp_tokens::TokenError::UnknownServer(_))
+    ));
+    let empty = mcp_tokens::create(&pool, keys, "pets", "  ", ttl).await;
+    assert!(matches!(empty, Err(mcp_tokens::TokenError::EmptyName)));
 }

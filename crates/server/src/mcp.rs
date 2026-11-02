@@ -32,7 +32,9 @@ use sqlx::{PgPool, types::Json};
 use toolport_core::{ArgumentError, HttpMethod, RequestTemplate, UpstreamRequest, build_request};
 
 use crate::{
+    auth::bearer_token,
     error::{ApiError, error_chain},
+    mcp_tokens::{self, AuthorizeError, McpCaller},
     state::AppState,
 };
 
@@ -63,28 +65,26 @@ pub fn service(handler: ToolportMcp, public_url: &Url) -> McpService {
     )
 }
 
-/// The server in the request path. `resolve_server` adds it to each HTTP request.
-/// The handler reads it per request, because one MCP session can send many HTTP requests.
-#[derive(Debug, Clone)]
-pub struct CalledServer {
-    pub id: i64,
-    pub name: String,
-}
-
-/// Route layer for `/mcp/{server}`. An unknown server gets a JSON 404 before rmcp sees the request.
-pub async fn resolve_server(
+/// Route layer for `/mcp/{server}`. It checks the token and adds the `McpCaller` to the request.
+/// The handler reads the caller per HTTP request, because one MCP session sends many requests,
+/// and a revoked token must stop working at once.
+pub async fn authorize(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path(server): Path<String>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let id: i64 = sqlx::query_scalar("SELECT id FROM servers WHERE name = $1")
-        .bind(&name)
-        .fetch_optional(&state.pool)
+    let bearer = bearer_token(request.headers());
+    let caller = mcp_tokens::authorize(&state.pool, &state.auth.jwt, &server, bearer)
         .await
-        .map_err(ApiError::Database)?
-        .ok_or(ApiError::McpServerNotFound)?;
-    request.extensions_mut().insert(CalledServer { id, name });
+        .map_err(|error| match error {
+            AuthorizeError::Database(source) => ApiError::Database(source),
+            other => {
+                tracing::debug!(error = %error_chain(&other), "MCP token rejected");
+                ApiError::Unauthorized
+            }
+        })?;
+    request.extensions_mut().insert(caller);
     Ok(next.run(request).await)
 }
 
@@ -99,8 +99,8 @@ pub struct ToolportMcp {
 /// Upstream failures are not errors here: the client gets them as a tool result with `isError`.
 #[derive(Debug, thiserror::Error)]
 pub enum CallError {
-    #[error("the request has no MCP server")]
-    MissingServer,
+    #[error("the request has no MCP caller")]
+    MissingCaller,
     #[error("the tool {0} does not exist")]
     UnknownTool(String),
     #[error(transparent)]
@@ -120,7 +120,7 @@ impl From<CallError> for McpError {
                 tracing::debug!(error = %error_chain(&error), "MCP tool call rejected");
                 McpError::invalid_params(error.to_string(), None)
             }
-            CallError::MissingServer | CallError::BaseUrl(_) | CallError::Database(_) => {
+            CallError::MissingCaller | CallError::BaseUrl(_) | CallError::Database(_) => {
                 tracing::error!(error = %error_chain(&error), "MCP request failed");
                 McpError::internal_error("an internal error happened", None)
             }
@@ -137,12 +137,12 @@ impl ToolportMcp {
         }
     }
 
-    async fn tools(&self, server: &CalledServer) -> Result<Vec<Tool>, CallError> {
+    async fn tools(&self, caller: &McpCaller) -> Result<Vec<Tool>, CallError> {
         let rows: Vec<(String, String, Json<JsonObject>)> = sqlx::query_as(
             "SELECT name, description, input_schema FROM tools
              WHERE server_id = $1 AND enabled ORDER BY id",
         )
-        .bind(server.id)
+        .bind(caller.server_id)
         .fetch_all(&self.pool)
         .await
         .map_err(CallError::Database)?;
@@ -154,7 +154,7 @@ impl ToolportMcp {
 
     async fn call(
         &self,
-        server: &CalledServer,
+        caller: &McpCaller,
         tool: &str,
         args: &JsonObject,
     ) -> Result<CallToolResult, CallError> {
@@ -162,7 +162,7 @@ impl ToolportMcp {
             "SELECT t.request, a.base_url FROM tools t JOIN apis a ON a.id = t.api_id
              WHERE t.server_id = $1 AND t.name = $2 AND t.enabled",
         )
-        .bind(server.id)
+        .bind(caller.server_id)
         .bind(tool)
         .fetch_optional(&self.pool)
         .await
@@ -193,7 +193,8 @@ impl ToolportMcp {
         let outcome = send(builder).await;
         // The log has no arguments and no response text, because they can hold secrets.
         tracing::info!(
-            server = %server.name,
+            server = %caller.server_name,
+            token_id = caller.token_id,
             tool,
             result = outcome.label(),
             status = outcome.status().map(|s| s.as_u16()),
@@ -215,8 +216,8 @@ impl ServerHandler for ToolportMcp {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let server = called_server(&context)?;
-        Ok(ListToolsResult::with_all_items(self.tools(&server).await?))
+        let caller = mcp_caller(&context)?;
+        Ok(ListToolsResult::with_all_items(self.tools(&caller).await?))
     }
 
     async fn call_tool(
@@ -224,19 +225,19 @@ impl ServerHandler for ToolportMcp {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let server = called_server(&context)?;
+        let caller = mcp_caller(&context)?;
         let args = request.arguments.unwrap_or_default();
-        Ok(self.call(&server, &request.name, &args).await?.into())
+        Ok(self.call(&caller, &request.name, &args).await?.into())
     }
 }
 
-fn called_server(context: &RequestContext<RoleServer>) -> Result<CalledServer, CallError> {
+fn mcp_caller(context: &RequestContext<RoleServer>) -> Result<McpCaller, CallError> {
     context
         .extensions
         .get::<Parts>()
-        .and_then(|parts| parts.extensions.get::<CalledServer>())
+        .and_then(|parts| parts.extensions.get::<McpCaller>())
         .cloned()
-        .ok_or(CallError::MissingServer)
+        .ok_or(CallError::MissingCaller)
 }
 
 fn method(method: HttpMethod) -> Method {

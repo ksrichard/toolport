@@ -70,7 +70,7 @@ pub struct Config {
 #[error("the JWT secret must have at least {MIN_JWT_SECRET_LEN} characters")]
 pub struct JwtSecretTooShort;
 
-fn parse_jwt_secret(value: &str) -> Result<String, JwtSecretTooShort> {
+pub fn parse_jwt_secret(value: &str) -> Result<String, JwtSecretTooShort> {
     if value.len() < MIN_JWT_SECRET_LEN {
         return Err(JwtSecretTooShort);
     }

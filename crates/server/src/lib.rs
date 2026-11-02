@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod import;
 pub mod mcp;
+pub mod mcp_tokens;
 pub mod state;
 pub mod users;
 
@@ -29,7 +30,7 @@ fn mcp_routes(state: &AppState) -> Router<AppState> {
         .route_service("/mcp/{server}", state.mcp.clone())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            mcp::resolve_server,
+            mcp::authorize,
         ))
 }
 

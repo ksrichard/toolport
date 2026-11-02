@@ -12,7 +12,7 @@ pub mod refresh;
 use axum::{
     Json, Router,
     extract::{FromRequestParts, Query, State},
-    http::{StatusCode, header::AUTHORIZATION, request::Parts},
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION, request::Parts},
     response::Redirect,
     routing::{get, post},
 };
@@ -38,6 +38,14 @@ pub fn routes() -> Router<AppState> {
         .route("/auth/logout", post(logout))
 }
 
+/// Returns the token of an `Authorization: Bearer <token>` header.
+pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+}
+
 /// The signed-in user of an `/api` request. The handler fails with 401 when the
 /// Bearer token is missing or not valid.
 pub struct AuthUser {
@@ -48,12 +56,7 @@ impl FromRequestParts<AppState> for AuthUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let token = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .ok_or(ApiError::Unauthorized)?;
+        let token = bearer_token(&parts.headers).ok_or(ApiError::Unauthorized)?;
         let user_id = state.auth.jwt.verify_access(token).map_err(|error| {
             tracing::debug!(%error, "access token rejected");
             ApiError::Unauthorized

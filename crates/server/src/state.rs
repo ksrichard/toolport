@@ -7,6 +7,7 @@ use crate::{
     auth::jwt::JwtKeys,
     config::Config,
     error::StartupError,
+    live::LiveHub,
     mcp::{self, McpService, ToolportMcp},
 };
 
@@ -16,6 +17,7 @@ pub struct AppState {
     pub auth: Arc<AuthSettings>,
     pub http: reqwest::Client,
     pub mcp: McpService,
+    pub live: Arc<LiveHub>,
 }
 
 pub struct AuthSettings {
@@ -45,12 +47,15 @@ impl AppState {
             github_api_url: config.github_api_url.clone(),
             jwt: JwtKeys::new(config.jwt_secret.as_bytes()),
         };
+        let live = Arc::new(LiveHub::default());
         let handler = ToolportMcp::new(
             pool.clone(),
             http.clone(),
             Duration::from_millis(config.upstream_timeout_ms),
+            live.clone(),
         );
         Ok(Self {
+            live,
             mcp: mcp::service(handler, &config.public_url),
             pool,
             auth: Arc::new(auth),

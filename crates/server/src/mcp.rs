@@ -33,7 +33,9 @@ use toolport_core::{ArgumentError, HttpMethod, RequestTemplate, UpstreamRequest,
 
 use crate::{
     auth::bearer_token,
+    calls::{self, CallResult, NewCall},
     error::{ApiError, error_chain},
+    live::{CallEvent, LiveHub},
     mcp_tokens::{self, AuthorizeError, McpCaller},
     state::AppState,
 };
@@ -93,6 +95,7 @@ pub struct ToolportMcp {
     pool: PgPool,
     http: reqwest::Client,
     upstream_timeout: Duration,
+    live: Arc<LiveHub>,
 }
 
 /// Errors that stop a tool call before ToolPort sends the upstream request.
@@ -129,11 +132,17 @@ impl From<CallError> for McpError {
 }
 
 impl ToolportMcp {
-    pub fn new(pool: PgPool, http: reqwest::Client, upstream_timeout: Duration) -> Self {
+    pub fn new(
+        pool: PgPool,
+        http: reqwest::Client,
+        upstream_timeout: Duration,
+        live: Arc<LiveHub>,
+    ) -> Self {
         Self {
             pool,
             http,
             upstream_timeout,
+            live,
         }
     }
 
@@ -155,6 +164,7 @@ impl ToolportMcp {
     async fn call(
         &self,
         caller: &McpCaller,
+        client_name: Option<&str>,
         tool: &str,
         args: &JsonObject,
     ) -> Result<CallToolResult, CallError> {
@@ -191,6 +201,7 @@ impl ToolportMcp {
 
         let started = Instant::now();
         let outcome = send(builder).await;
+        let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
         // The log has no arguments and no response text, because they can hold secrets.
         tracing::info!(
             server = %caller.server_name,
@@ -198,9 +209,26 @@ impl ToolportMcp {
             tool,
             result = outcome.label(),
             status = outcome.status().map(|s| s.as_u16()),
-            latency_ms = started.elapsed().as_millis() as u64,
+            latency_ms,
             "MCP tool call",
         );
+        let call = NewCall {
+            server_id: caller.server_id,
+            token_id: caller.token_id,
+            client_name,
+            tool,
+            result: outcome.call_result(),
+            http_status: outcome.status().map(|s| s.as_u16()),
+            latency_ms,
+        };
+        // A failed save must not fail the tool call. The client already has its answer.
+        match calls::record(&self.pool, call).await {
+            Ok(record) => self.live.publish(CallEvent {
+                server_id: caller.server_id,
+                record,
+            }),
+            Err(error) => tracing::error!(error = %error_chain(&error), "cannot save the call"),
+        }
         Ok(outcome.into_result(self.upstream_timeout))
     }
 }
@@ -217,6 +245,7 @@ impl ServerHandler for ToolportMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let caller = mcp_caller(&context)?;
+        self.live.seen(&caller, client_name(&context).as_deref());
         Ok(ListToolsResult::with_all_items(self.tools(&caller).await?))
     }
 
@@ -226,8 +255,13 @@ impl ServerHandler for ToolportMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let caller = mcp_caller(&context)?;
+        let client = client_name(&context);
+        self.live.seen(&caller, client.as_deref());
         let args = request.arguments.unwrap_or_default();
-        Ok(self.call(&caller, &request.name, &args).await?.into())
+        let result = self
+            .call(&caller, client.as_deref(), &request.name, &args)
+            .await?;
+        Ok(result.into())
     }
 }
 
@@ -238,6 +272,14 @@ fn mcp_caller(context: &RequestContext<RoleServer>) -> Result<McpCaller, CallErr
         .and_then(|parts| parts.extensions.get::<McpCaller>())
         .cloned()
         .ok_or(CallError::MissingCaller)
+}
+
+/// The name that the client sent in `initialize`, for example `claude-ai`.
+fn client_name(context: &RequestContext<RoleServer>) -> Option<String> {
+    context
+        .peer
+        .peer_info()
+        .map(|info| info.client_info.name.clone())
 }
 
 fn method(method: HttpMethod) -> Method {
@@ -285,6 +327,17 @@ impl Outcome {
             Self::Answered { .. } => "upstream_error",
             Self::TimedOut => "timed_out",
             Self::Failed => "request_failed",
+        }
+    }
+
+    fn call_result(&self) -> CallResult {
+        match self {
+            Self::Answered { status, .. } if status.is_success() => CallResult::Ok,
+            Self::Answered { status, .. } if *status == StatusCode::NOT_FOUND => {
+                CallResult::NotFound
+            }
+            Self::Answered { .. } | Self::Failed => CallResult::UpstreamError,
+            Self::TimedOut => CallResult::TimedOut,
         }
     }
 

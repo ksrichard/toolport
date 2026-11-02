@@ -22,6 +22,10 @@ pub struct Config {
     #[arg(long, env = "DATABASE_MAX_CONNECTIONS", default_value_t = 10)]
     pub database_max_connections: u32,
 
+    /// Time limit in milliseconds for one upstream API call of an MCP tool.
+    #[arg(long, env = "UPSTREAM_TIMEOUT_MS", default_value_t = 10_000)]
+    pub upstream_timeout_ms: u64,
+
     /// The URL that users open in the browser. GitHub sends users back to this URL after sign-in.
     #[arg(long, env = "PUBLIC_URL")]
     pub public_url: Url,

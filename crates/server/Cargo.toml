@@ -3,6 +3,8 @@ name = "server"
 edition.workspace = true
 version.workspace = true
 publish.workspace = true
+# The crate has a second binary, `import-spec`. `cargo run -p server` starts the server.
+default-run = "server"
 
 [dependencies]
 axum = { version = "0.8.9", features = ["macros"] }
@@ -12,12 +14,14 @@ cookie = { version = "0.18", default-features = false }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 rand = "0.10.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "3.8.0", features = ["server", "macros", "transport-streamable-http-server"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "json"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "net", "signal"] }
+toolport-core = { version = "0.1.0", path = "../core" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 

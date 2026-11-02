@@ -1,10 +1,12 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod import;
+pub mod mcp;
 pub mod state;
 pub mod users;
 
-use axum::{Json, Router, extract::State, routing::get};
+use axum::{Json, Router, extract::State, middleware, routing::get};
 use serde_json::{Value, json};
 
 use crate::{error::ApiError, state::AppState};
@@ -17,7 +19,18 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .nest("/api", api)
         .merge(auth::routes())
+        .merge(mcp_routes(&state))
         .with_state(state)
+}
+
+/// The route layer runs only for matched routes, so `/mcp/{server}` always has the path parameter.
+fn mcp_routes(state: &AppState) -> Router<AppState> {
+    Router::new()
+        .route_service("/mcp/{server}", state.mcp.clone())
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            mcp::resolve_server,
+        ))
 }
 
 /// Returns 503 when the database does not answer, so Docker and Caddy see the real state.

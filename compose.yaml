@@ -25,6 +25,7 @@ services:
     environment:
       DATABASE_URL: postgres://toolport:${POSTGRES_PASSWORD}@postgres:5432/toolport
       RUST_LOG: ${RUST_LOG:-info}
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-10000}
       PUBLIC_URL: https://${TOOLPORT_DOMAIN:-localhost}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?set GITHUB_CLIENT_ID in .env}

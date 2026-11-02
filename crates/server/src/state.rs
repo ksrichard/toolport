@@ -3,13 +3,19 @@ use std::{sync::Arc, time::Duration};
 use reqwest::Url;
 use sqlx::PgPool;
 
-use crate::{auth::jwt::JwtKeys, config::Config, error::StartupError};
+use crate::{
+    auth::jwt::JwtKeys,
+    config::Config,
+    error::StartupError,
+    mcp::{self, McpService, ToolportMcp},
+};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub auth: Arc<AuthSettings>,
     pub http: reqwest::Client,
+    pub mcp: McpService,
 }
 
 pub struct AuthSettings {
@@ -39,7 +45,13 @@ impl AppState {
             github_api_url: config.github_api_url.clone(),
             jwt: JwtKeys::new(config.jwt_secret.as_bytes()),
         };
+        let handler = ToolportMcp::new(
+            pool.clone(),
+            http.clone(),
+            Duration::from_millis(config.upstream_timeout_ms),
+        );
         Ok(Self {
+            mcp: mcp::service(handler, &config.public_url),
             pool,
             auth: Arc::new(auth),
             http,

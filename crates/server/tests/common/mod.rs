@@ -107,3 +107,13 @@ pub fn location(response: &Response) -> String {
         .unwrap()
         .to_owned()
 }
+
+/// Creates a user row, as the first GitHub sign-in does. Returns the user id.
+pub async fn create_user(pool: &PgPool, github_id: i64, login: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO users (github_id, github_login) VALUES ($1, $2) RETURNING id")
+        .bind(github_id)
+        .bind(login)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}

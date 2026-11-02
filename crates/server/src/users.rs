@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use ts_rs::TS;
 
 use crate::{
     auth::{AuthUser, github::GithubUser},
@@ -13,7 +14,8 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 pub enum Theme {
@@ -22,8 +24,10 @@ pub enum Theme {
     Light,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
 pub struct User {
+    #[ts(type = "number")]
     pub id: i64,
     pub github_login: String,
     pub name: Option<String>,

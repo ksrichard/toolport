@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::auth::github::GithubError;
+use crate::{auth::github::GithubError, import::ImportError, mcp_tokens::TokenError};
 
 /// Errors that stop the server before or while it serves requests.
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +46,26 @@ pub enum ApiError {
     TokenSigning(#[source] jsonwebtoken::errors::Error),
     #[error("an internal error happened")]
     Encode(#[source] axum::Error),
+    #[error(
+        "the server name is not valid, use 1 to 63 lowercase letters, digits, and `-`, and start with a letter or digit"
+    )]
+    InvalidServerName,
+    #[error("the server name {0} is already in use")]
+    ServerNameTaken(String),
+    #[error("the spec URL must be an http:// or https:// URL")]
+    InvalidSpecUrl,
+    #[error("the spec is not UTF-8 text")]
+    SpecNotText,
+    #[error("the base URL is not a valid URL")]
+    InvalidBaseUrl,
+    #[error("the spec must be smaller than {} MiB", .0 / (1024 * 1024))]
+    SpecTooLarge(usize),
+    #[error("cannot download the spec from the URL")]
+    SpecDownload(#[source] reqwest::Error),
+    #[error("{0}")]
+    Import(#[from] ImportError),
+    #[error("{0}")]
+    Token(#[from] TokenError),
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -65,6 +85,27 @@ impl ApiError {
             Self::Database(_) | Self::TokenSigning(_) | Self::Encode(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
+            Self::InvalidServerName
+            | Self::InvalidSpecUrl
+            | Self::SpecNotText
+            | Self::InvalidBaseUrl
+            | Self::SpecTooLarge(_)
+            | Self::SpecDownload(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::ServerNameTaken(_) => StatusCode::CONFLICT,
+            Self::Import(error) => match error {
+                ImportError::ToolNameTaken(_) | ImportError::ServerOwnedByOther(_) => {
+                    StatusCode::CONFLICT
+                }
+                ImportError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                _ => StatusCode::UNPROCESSABLE_ENTITY,
+            },
+            Self::Token(error) => match error {
+                TokenError::EmptyName => StatusCode::UNPROCESSABLE_ENTITY,
+                TokenError::UnknownServer(_) => StatusCode::NOT_FOUND,
+                TokenError::Signing(_) | TokenError::Database(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            },
         }
     }
 
@@ -75,6 +116,29 @@ impl ApiError {
             Self::NotFound => "not_found",
             Self::DatabaseUnavailable(_) => "database_unavailable",
             Self::Database(_) | Self::TokenSigning(_) | Self::Encode(_) => "internal_error",
+            Self::InvalidServerName => "invalid_server_name",
+            Self::ServerNameTaken(_) => "server_name_taken",
+            Self::InvalidSpecUrl => "invalid_spec_url",
+            Self::SpecNotText => "spec_not_text",
+            Self::InvalidBaseUrl => "bad_base_url",
+            Self::SpecTooLarge(_) => "spec_too_large",
+            Self::SpecDownload(_) => "spec_download_failed",
+            Self::Import(error) => match error {
+                ImportError::InvalidServerName(_) => "invalid_server_name",
+                ImportError::Spec(_) => "invalid_spec",
+                ImportError::NoTools => "no_tools",
+                ImportError::MissingBaseUrl => "missing_base_url",
+                ImportError::BadBaseUrl(_) => "bad_base_url",
+                ImportError::UnknownOwner(_) => "unknown_owner",
+                ImportError::ServerOwnedByOther(_) => "server_name_taken",
+                ImportError::ToolNameTaken(_) => "tool_name_taken",
+                ImportError::Database(_) => "internal_error",
+            },
+            Self::Token(error) => match error {
+                TokenError::EmptyName => "invalid_token_name",
+                TokenError::UnknownServer(_) => "not_found",
+                TokenError::Signing(_) | TokenError::Database(_) => "internal_error",
+            },
         }
     }
 }
@@ -88,9 +152,15 @@ impl IntoResponse for ApiError {
         } else {
             tracing::debug!(error = %error_chain(&self), code = self.code(), "API request rejected");
         }
+        // A 500 never shows its message, because it can name internal details.
+        let message = if status == StatusCode::INTERNAL_SERVER_ERROR {
+            "an internal error happened".to_owned()
+        } else {
+            self.to_string()
+        };
         let body = ErrorBody {
             error: self.code(),
-            message: self.to_string(),
+            message,
         };
         let mut response = (status, Json(body)).into_response();
         if status == StatusCode::UNAUTHORIZED {

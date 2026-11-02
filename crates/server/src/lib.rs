@@ -6,7 +6,9 @@ pub mod import;
 pub mod live;
 pub mod mcp;
 pub mod mcp_tokens;
+pub mod servers;
 pub mod state;
+pub mod templates;
 pub mod users;
 
 use axum::{Json, Router, extract::State, middleware, routing::get};
@@ -19,6 +21,7 @@ pub fn app(state: AppState) -> Router {
         .route("/health", get(health))
         .merge(users::routes())
         .merge(live::routes())
+        .merge(servers::routes())
         .fallback(|| async { ApiError::NotFound });
     Router::new()
         .nest("/api", api)

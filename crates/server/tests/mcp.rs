@@ -15,7 +15,7 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use server::{
     calls::{self, CallResult},
-    import::{ImportRequest, import_spec},
+    import::{ImportRequest, Owner, import_spec},
     mcp_tokens,
     state::AppState,
 };
@@ -93,7 +93,7 @@ async fn import(pool: &PgPool, server: &str, spec: &str, base_url: Url) {
     import_spec(
         pool,
         ImportRequest {
-            owner_login: "octocat",
+            owner: Owner::Login("octocat"),
             server,
             api_name: None,
             spec_text: spec,

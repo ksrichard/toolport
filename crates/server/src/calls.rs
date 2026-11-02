@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use sqlx::PgPool;
+use ts_rs::TS;
 
 /// The metrics use the calls of this many last seconds.
 pub const METRICS_WINDOW_SECS: i64 = 60;
@@ -9,7 +10,8 @@ pub const METRICS_WINDOW_SECS: i64 = 60;
 pub const CHART_SECS: i64 = 300;
 pub const BUCKET_SECS: i64 = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 pub enum CallResult {
@@ -30,10 +32,13 @@ pub struct NewCall<'a> {
 }
 
 /// One row of the call log, as the dashboard gets it.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
 pub struct CallRecord {
+    #[ts(type = "number")]
     pub id: i64,
     /// Milliseconds since the Unix epoch.
+    #[ts(type = "number")]
     pub at_ms: i64,
     pub tool: String,
     pub client_name: Option<String>,
@@ -43,8 +48,10 @@ pub struct CallRecord {
     pub latency_ms: i32,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
 pub struct Metrics {
+    #[ts(type = "number")]
     pub calls_per_minute: i64,
     /// From 0.0 to 1.0. Every result except `ok` counts as an error.
     pub error_rate: f64,
@@ -54,11 +61,15 @@ pub struct Metrics {
 }
 
 /// The chart buckets that have calls. The dashboard fills the empty ones.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow, PartialEq)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, PartialEq, TS)]
+#[ts(export)]
 pub struct Bucket {
     /// The bucket start in milliseconds since the Unix epoch. It is a multiple of `BUCKET_SECS`.
+    #[ts(type = "number")]
     pub start_ms: i64,
+    #[ts(type = "number")]
     pub calls: i64,
+    #[ts(type = "number")]
     pub errors: i64,
 }
 

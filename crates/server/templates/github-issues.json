@@ -1,0 +1,47 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "GitHub issues", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.github.com" }],
+  "paths": {
+    "/repos/{owner}/{repo}/issues": {
+      "get": {
+        "operationId": "listRepoIssues",
+        "summary": "List the issues of a repository",
+        "description": "The list also contains pull requests. Those items have a `pull_request` field.",
+        "parameters": [
+          { "name": "owner", "in": "path", "required": true, "description": "The user or organization, for example `rust-lang`.", "schema": { "type": "string" } },
+          { "name": "repo", "in": "path", "required": true, "description": "The repository name, for example `rust`.", "schema": { "type": "string" } },
+          { "name": "state", "in": "query", "schema": { "type": "string", "enum": ["open", "closed", "all"], "default": "open" } },
+          { "name": "labels", "in": "query", "description": "Comma-separated label names.", "schema": { "type": "string" } },
+          { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["created", "updated", "comments"] } },
+          { "name": "per_page", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 } }
+        ],
+        "responses": { "200": { "description": "The issues" } }
+      }
+    },
+    "/repos/{owner}/{repo}/issues/{issue_number}": {
+      "get": {
+        "operationId": "getIssue",
+        "summary": "Get one issue",
+        "parameters": [
+          { "name": "owner", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "repo", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "issue_number", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "The issue" } }
+      }
+    },
+    "/search/issues": {
+      "get": {
+        "operationId": "searchIssues",
+        "summary": "Search issues and pull requests",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "description": "A GitHub search query, for example `repo:rust-lang/rust is:issue is:open label:E-easy`.", "schema": { "type": "string" } },
+          { "name": "per_page", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 } }
+        ],
+        "responses": { "200": { "description": "The search result" } }
+      }
+    }
+  }
+}

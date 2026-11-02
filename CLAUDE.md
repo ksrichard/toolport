@@ -162,8 +162,12 @@ Each milestone ends with working code, tests, and a short demo.
    GitHub sign-in creates the user. The server then sets the refresh cookie, and the app gets
    a Bearer JWT from `/auth/refresh`. Build the side menu, the header with the MCP URL and the
    Copy button, and the theme switcher (saved per user).
-   Status: done, except the MCP URL and the Copy button. They need servers (milestone 11).
+   Status: done. The Live page shows the MCP URL and the Copy button.
 7. Live page. Build it from the mockup with real data from milestone 5. Keep the Pause button.
+   Status: done, with onboarding. A user with no server gets a wizard: pick a template
+   (`crates/server/templates/`) or an own spec, name the server, copy the client command.
+   The tool switches stay read-only until milestone 8. `cargo test` writes the API types to
+   `web/src/types/` (ts-rs), and CI fails when they are out of date.
 8. Tools page. List all tools with on/off switches. When a tool changes, send
    `notifications/tools/list_changed` to the open MCP sessions. Keep at least one tool on.
 9. APIs page. Add an API from a spec URL or a file. Set the base URL and the upstream auth

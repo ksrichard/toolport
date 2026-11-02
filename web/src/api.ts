@@ -1,15 +1,16 @@
 // The access JWT lives only in this module's memory. The refresh token is an HttpOnly cookie
 // that JavaScript cannot read. The browser sends it only to /auth/*.
 
-export type Theme = 'neon' | 'calm' | 'light'
+import type { ImportApi } from './types/ImportApi'
+import type { ImportedApi } from './types/ImportedApi'
+import type { NewToken } from './types/NewToken'
+import type { ServerSummary } from './types/ServerSummary'
+import type { Template } from './types/Template'
+import type { Theme } from './types/Theme'
+import type { ToolSummary } from './types/ToolSummary'
+import type { User } from './types/User'
 
-export interface User {
-  id: number
-  github_login: string
-  name: string | null
-  avatar_url: string | null
-  theme: Theme
-}
+export type { Theme, User }
 
 export class ApiError extends Error {
   readonly status: number
@@ -67,6 +68,20 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (res.status === 204 ? undefined : await res.json()) as T
 }
 
+/** Opens a long-lived response, for example the SSE stream. It refreshes the token once on a 401. */
+export async function openStream(path: string, signal: AbortSignal): Promise<Response> {
+  if (!accessToken) await refreshSession()
+  let res = await send(path, { signal })
+  if (res.status === 401 && (await refreshSession())) {
+    res = await send(path, { signal })
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new ApiError(res.status, body?.error ?? 'unknown_error', body?.message ?? res.statusText)
+  }
+  return res
+}
+
 function send(path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers)
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
@@ -78,3 +93,20 @@ export const getMe = () => api<User>('/api/me')
 
 export const setTheme = (theme: Theme) =>
   api<void>('/api/me/theme', { method: 'PUT', body: JSON.stringify({ theme }) })
+
+const server = (name: string) => `/api/servers/${encodeURIComponent(name)}`
+
+export const getTemplates = () => api<Template[]>('/api/templates')
+
+export const getServers = () => api<ServerSummary[]>('/api/servers')
+
+export const createServer = (name: string) =>
+  api<ServerSummary>('/api/servers', { method: 'POST', body: JSON.stringify({ name }) })
+
+export const getTools = (name: string) => api<ToolSummary[]>(`${server(name)}/tools`)
+
+export const importApi = (name: string, source: ImportApi) =>
+  api<ImportedApi[]>(`${server(name)}/apis`, { method: 'POST', body: JSON.stringify(source) })
+
+export const createToken = (name: string, tokenName: string) =>
+  api<NewToken>(`${server(name)}/tokens`, { method: 'POST', body: JSON.stringify({ name: tokenName }) })

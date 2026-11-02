@@ -1,7 +1,7 @@
 mod common;
 
 use reqwest::Url;
-use server::import::{ImportError, ImportRequest, import_spec};
+use server::import::{ImportError, ImportRequest, Owner, import_spec};
 use sqlx::PgPool;
 use toolport_core::SpecError;
 
@@ -9,7 +9,7 @@ const PETSTORE: &str = include_str!("../../core/tests/fixtures/petstore.json");
 
 fn petstore<'a>(server: &'a str, api_name: Option<&'a str>) -> ImportRequest<'a> {
     ImportRequest {
-        owner_login: "octocat",
+        owner: Owner::Login("octocat"),
         server,
         api_name,
         spec_text: PETSTORE,
@@ -111,7 +111,7 @@ async fn server_of_another_user_is_rejected(pool: PgPool) {
         .unwrap();
 
     let mut request = petstore("petstore", Some("other"));
-    request.owner_login = "mallory";
+    request.owner = Owner::Login("mallory");
     let error = import_spec(&pool, request).await.unwrap_err();
     assert!(matches!(error, ImportError::ServerOwnedByOther(_)));
 }

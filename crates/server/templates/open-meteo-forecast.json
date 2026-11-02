@@ -1,0 +1,25 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Open-Meteo forecast", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.open-meteo.com/v1" }],
+  "paths": {
+    "/forecast": {
+      "get": {
+        "operationId": "getWeather",
+        "summary": "Get the current weather and the forecast for a place",
+        "description": "Set at least one of `current`, `hourly`, or `daily`. Each one is a comma-separated list of weather variables. Use searchPlaces to get the coordinates of a place.",
+        "parameters": [
+          { "name": "latitude", "in": "query", "required": true, "schema": { "type": "number", "minimum": -90, "maximum": 90 } },
+          { "name": "longitude", "in": "query", "required": true, "schema": { "type": "number", "minimum": -180, "maximum": 180 } },
+          { "name": "current", "in": "query", "description": "Variables for now, for example `temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m`.", "schema": { "type": "string" } },
+          { "name": "hourly", "in": "query", "description": "Variables per hour, for example `temperature_2m,precipitation_probability`.", "schema": { "type": "string" } },
+          { "name": "daily", "in": "query", "description": "Variables per day, for example `temperature_2m_max,temperature_2m_min,precipitation_sum`.", "schema": { "type": "string" } },
+          { "name": "timezone", "in": "query", "description": "A time zone name such as `Europe/Berlin`, or `auto`.", "schema": { "type": "string", "default": "auto" } },
+          { "name": "forecast_days", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 16, "default": 7 } },
+          { "name": "temperature_unit", "in": "query", "schema": { "type": "string", "enum": ["celsius", "fahrenheit"] } }
+        ],
+        "responses": { "200": { "description": "The weather data" } }
+      }
+    }
+  }
+}

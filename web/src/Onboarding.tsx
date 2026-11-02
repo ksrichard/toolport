@@ -1,0 +1,427 @@
+import { useEffect, useState, type FormEvent } from 'react'
+import { ApiError, createServer, createToken, getTemplates, importApi } from './api'
+import { CopyButton } from './CopyButton'
+import { useLiveStream } from './liveStream'
+import type { ImportApi } from './types/ImportApi'
+import type { ImportedApi } from './types/ImportedApi'
+import type { NewToken } from './types/NewToken'
+import type { ServerSummary } from './types/ServerSummary'
+import type { Template } from './types/Template'
+
+// The same rule as `is_valid_server_name` in crates/core/src/server_name.rs.
+const SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/
+const TOKEN_NAME = 'first-client'
+
+type Step = 'pick' | 'name' | 'connect'
+const STEPS: { id: Step; label: string }[] = [
+  { id: 'pick', label: 'Pick a template' },
+  { id: 'name', label: 'Name the server' },
+  { id: 'connect', label: 'Copy the command' },
+]
+
+/** `own` is the card for the user's own OpenAPI spec. */
+type Choice = { kind: 'template'; template: Template } | { kind: 'own' }
+
+interface OnboardingProps {
+  /** A server from an earlier, unfinished onboarding. The wizard continues with it. */
+  existing?: ServerSummary
+  /** Shown as a Cancel button when the user already has a working server. */
+  onCancel?: () => void
+  /** Reloads the server list. The wizard calls it after each change on the server. */
+  onChanged: () => void
+  onDone: (server: string) => void
+}
+
+export function Onboarding({ existing, onCancel, onChanged, onDone }: OnboardingProps) {
+  const [step, setStep] = useState<Step>(existing && existing.apis > 0 ? 'connect' : 'pick')
+  const [templates, setTemplates] = useState<Template[] | null>(null)
+  const [choice, setChoice] = useState<Choice | null>(null)
+  const [server, setServer] = useState<ServerSummary | null>(existing ?? null)
+  const [imported, setImported] = useState<ImportedApi[]>([])
+  const [token, setToken] = useState<NewToken | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getTemplates().then(setTemplates, (e: Error) => setError(e.message))
+  }, [])
+
+  const pick = (next: Choice) => {
+    setChoice(next)
+    setError(null)
+    setStep('name')
+  }
+
+  return (
+    <div className="onboarding">
+      <div className="eyebrow">// {step === 'pick' ? 'Templates' : step === 'name' ? 'Your server' : 'Connect'}</div>
+      {step === 'pick' && (
+        <>
+          <h1 className="hero">Start from a template, not a blank form</h1>
+          <p className="lead">
+            A template is a ready-made API. You pick it, and your AI client can use its tools a few seconds later.
+          </p>
+          {error && <p className="alert" role="alert">{error}</p>}
+          <div className="cards">
+            {templates?.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`card${choice?.kind === 'template' && choice.template.id === t.id ? ' selected' : ''}`}
+                onClick={() => pick({ kind: 'template', template: t })}
+              >
+                <TemplateIcon id={t.id} />
+                <span className="card-title">{t.title}</span>
+                <span className="card-host">{t.host}</span>
+                <span className="card-text">{t.summary}</span>
+                <span className={`badge ${t.keyless ? 'ok' : 'key'}`}>{t.badge}</span>
+              </button>
+            ))}
+          </div>
+          <button type="button" className="link" onClick={() => pick({ kind: 'own' })}>
+            Or import your own OpenAPI 3.0 spec →
+          </button>
+        </>
+      )}
+
+      {step === 'name' && choice && (
+        <NameStep
+          choice={choice}
+          existing={server}
+          onBack={() => setStep('pick')}
+          onCreated={(created) => {
+            setServer(created)
+            onChanged()
+          }}
+          onImported={(result, newToken) => {
+            setImported(result)
+            setToken(newToken)
+            setStep('connect')
+            onChanged()
+          }}
+        />
+      )}
+
+      {step === 'connect' && server && (
+        <ConnectStep
+          server={server}
+          imported={imported}
+          token={token}
+          onToken={(t) => {
+            setToken(t)
+            onChanged()
+          }}
+          onDone={() => onDone(server.name)}
+        />
+      )}
+
+      <div className="steps-row">
+        <ol className="steps" aria-label="Progress">
+          {STEPS.map((s, i) => (
+            <li key={s.id} aria-current={s.id === step ? 'step' : undefined}>
+              {i > 0 && <Arrow />}
+              <span className="chip">{s.label}</span>
+            </li>
+          ))}
+        </ol>
+        <span className="eta">~30 s</span>
+      </div>
+      {onCancel && (
+        <button type="button" className="link muted-link" onClick={onCancel}>
+          Cancel and go back to the dashboard
+        </button>
+      )}
+    </div>
+  )
+}
+
+interface NameStepProps {
+  choice: Choice
+  existing: ServerSummary | null
+  onBack: () => void
+  onCreated: (server: ServerSummary) => void
+  onImported: (imported: ImportedApi[], token: NewToken) => void
+}
+
+function NameStep({ choice, existing, onBack, onCreated, onImported }: NameStepProps) {
+  const [name, setName] = useState(existing?.name ?? (choice.kind === 'template' ? choice.template.server_name : ''))
+  const [specMode, setSpecMode] = useState<'url' | 'file'>('url')
+  const [specUrl, setSpecUrl] = useState('')
+  const [specFile, setSpecFile] = useState<{ name: string; text: string } | null>(null)
+  const [baseUrl, setBaseUrl] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const nameValid = SERVER_NAME.test(name)
+  const specReady = choice.kind === 'template' || (specMode === 'url' ? specUrl.trim() !== '' : specFile !== null)
+
+  const source = (): ImportApi => {
+    if (choice.kind === 'template') return { source: 'template', template: choice.template.id }
+    const base = baseUrl.trim() || undefined
+    return specMode === 'url'
+      ? { source: 'url', spec_url: specUrl.trim(), base_url: base }
+      : { source: 'text', spec: specFile?.text ?? '', base_url: base }
+  }
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!nameValid || !specReady) return
+    setError(null)
+    try {
+      // A server from a failed earlier try stays. The next try reuses it.
+      if (!existing) {
+        setBusy('Creating the server')
+        onCreated(await createServer(name))
+      }
+      setBusy('Making the tools')
+      const imported = await importApi(name, source())
+      setBusy('Creating a token')
+      const token = await createToken(name, TOKEN_NAME)
+      onImported(imported, token)
+    } catch (e) {
+      setError(e instanceof ApiError || e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <form className="panel wizard" onSubmit={submit}>
+      <h1 className="hero">{choice.kind === 'template' ? `Name your ${choice.template.title} server` : 'Import your API'}</h1>
+      <label className="field">
+        <span>Server name</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value.toLowerCase())}
+          disabled={existing !== null || busy !== null}
+          autoFocus
+          spellCheck={false}
+          aria-invalid={name !== '' && !nameValid}
+        />
+        <small className={name !== '' && !nameValid ? 'bad' : undefined}>
+          Use lowercase letters, digits, and <code>-</code>. Your MCP URL ends with <code>/mcp/{name || '<name>'}</code>.
+        </small>
+      </label>
+
+      {choice.kind === 'own' && (
+        <>
+          <div className="skins" role="group" aria-label="Spec source">
+            <button type="button" aria-pressed={specMode === 'url'} onClick={() => setSpecMode('url')}>
+              From a URL
+            </button>
+            <button type="button" aria-pressed={specMode === 'file'} onClick={() => setSpecMode('file')}>
+              From a file
+            </button>
+          </div>
+          {specMode === 'url' ? (
+            <label className="field">
+              <span>Spec URL</span>
+              <input
+                type="url"
+                placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+                value={specUrl}
+                onChange={(e) => setSpecUrl(e.target.value)}
+                disabled={busy !== null}
+              />
+            </label>
+          ) : (
+            <label className="field">
+              <span>Spec file (JSON)</span>
+              <input
+                type="file"
+                accept=".json,application/json"
+                disabled={busy !== null}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  setSpecFile(file ? { name: file.name, text: await file.text() } : null)
+                }}
+              />
+            </label>
+          )}
+          <label className="field">
+            <span>Base URL (optional)</span>
+            <input
+              type="url"
+              placeholder="The first server URL in the spec"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              disabled={busy !== null}
+            />
+            <small>ToolPort sends the tool calls to this URL. Only OpenAPI 3.0 JSON specs work for now.</small>
+          </label>
+        </>
+      )}
+
+      {error && <p className="alert" role="alert">{error}</p>}
+      <div className="actions">
+        <button type="button" className="btn" onClick={onBack} disabled={busy !== null}>
+          Back
+        </button>
+        <button type="submit" className="btn primary big" disabled={!nameValid || !specReady || busy !== null}>
+          {busy ? `${busy}…` : 'Create server'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+const CLIENTS = ['Claude Code', 'Cursor', 'Claude Desktop'] as const
+type Client = (typeof CLIENTS)[number]
+
+function snippet(client: Client, server: ServerSummary, token: string): string {
+  const auth = `Bearer ${token}`
+  switch (client) {
+    case 'Claude Code':
+      return `claude mcp add --transport http ${server.name} ${server.mcp_url} --header "Authorization: ${auth}"`
+    case 'Cursor':
+      return JSON.stringify({ mcpServers: { [server.name]: { url: server.mcp_url, headers: { Authorization: auth } } } }, null, 2)
+    case 'Claude Desktop':
+      // Claude Desktop config files start only local servers. mcp-remote forwards to the URL.
+      return JSON.stringify(
+        {
+          mcpServers: {
+            [server.name]: {
+              command: 'npx',
+              args: ['-y', 'mcp-remote', server.mcp_url, '--header', 'Authorization:${AUTH}'],
+              env: { AUTH: auth },
+            },
+          },
+        },
+        null,
+        2,
+      )
+  }
+}
+
+const WHERE: Record<Client, string> = {
+  'Claude Code': 'Run this command in a terminal.',
+  Cursor: 'Add this to ~/.cursor/mcp.json, then reload Cursor.',
+  'Claude Desktop': 'Add this to claude_desktop_config.json, then restart Claude Desktop.',
+}
+
+interface ConnectStepProps {
+  server: ServerSummary
+  imported: ImportedApi[]
+  token: NewToken | null
+  onToken: (token: NewToken) => void
+  onDone: () => void
+}
+
+function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepProps) {
+  const [client, setClient] = useState<Client>('Claude Code')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const tools = imported.flatMap((api) => api.tools)
+  const skipped = imported.reduce((n, api) => n + api.skipped.length, 0)
+
+  const newToken = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      onToken(await createToken(server.name, TOKEN_NAME))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="panel wizard">
+      <h1 className="hero">Connect your AI client</h1>
+      {tools.length > 0 && (
+        <p className="lead">
+          <strong>{server.name}</strong> has {tools.length === 1 ? '1 tool' : `${tools.length} tools`}:{' '}
+          <span className="mono">{tools.join(', ')}</span>.
+          {skipped > 0 && ` ToolPort skipped ${skipped} operations that it cannot call yet.`}
+        </p>
+      )}
+
+      {token ? (
+        <>
+          <div className="skins" role="tablist" aria-label="MCP client">
+            {CLIENTS.map((c) => (
+              <button key={c} type="button" role="tab" aria-selected={client === c} aria-pressed={client === c} onClick={() => setClient(c)}>
+                {c}
+              </button>
+            ))}
+          </div>
+          <p className="muted">{WHERE[client]}</p>
+          <div className="snippet">
+            <pre>{snippet(client, server, token.token)}</pre>
+            <CopyButton text={snippet(client, server, token.token)} label="Copy" className="btn primary" />
+          </div>
+          <p className="note">
+            The command contains a token. ToolPort shows it only now and does not store it. The token works for{' '}
+            {token.expires_in_days} days.
+          </p>
+          <FirstConnection server={server.name} />
+        </>
+      ) : (
+        <>
+          <p className="muted">Your client needs a token for this server. ToolPort shows the token value only once.</p>
+          {error && <p className="alert" role="alert">{error}</p>}
+          <div className="actions">
+            <button type="button" className="btn primary big" onClick={newToken} disabled={busy}>
+              {busy ? 'Creating the token…' : 'Create a token'}
+            </button>
+          </div>
+        </>
+      )}
+      <div className="actions">
+        <button type="button" className="btn big" onClick={onDone}>
+          Open the Live page
+        </button>
+      </div>
+    </section>
+  )
+}
+
+/** Shows when the new client connects and makes its first call. */
+function FirstConnection({ server }: { server: string }) {
+  const live = useLiveStream(server, false)
+  const client = live.clients[0]
+  const call = live.calls[0]
+  return (
+    <ul className="checks" aria-live="polite">
+      <li className={client ? 'done' : 'waiting'}>
+        {client ? `${client.client_name ?? 'A client'} is connected.` : 'Waiting for your client to connect…'}
+      </li>
+      <li className={call ? 'done' : 'waiting'}>
+        {call ? `First call: ${call.tool} (${call.result === 'ok' ? 'OK' : call.result.replace('_', ' ')}).` : 'Waiting for the first tool call. Ask your client about the API.'}
+      </li>
+    </ul>
+  )
+}
+
+function Arrow() {
+  return (
+    <svg className="arrow" width="30" height="10" viewBox="0 0 30 10" aria-hidden="true">
+      <path d="M0 5h24M20 1l5 4-5 4" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  )
+}
+
+function TemplateIcon({ id }: { id: string }) {
+  const common = { width: 26, height: 26, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const
+  switch (id) {
+    case 'weather':
+      return (
+        <svg className="card-icon" {...common}>
+          <path d="M7 18a4 4 0 0 1-.6-7.96A5.5 5.5 0 0 1 17 9a3.5 3.5 0 0 1 .5 6.97V18H7Z" />
+        </svg>
+      )
+    case 'github-issues':
+      return (
+        <svg className="card-icon" {...common}>
+          <path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16" />
+        </svg>
+      )
+    default:
+      return (
+        <svg className="card-icon" {...common}>
+          <rect x="3" y="5" width="18" height="15" rx="2" />
+          <path d="M3 9h18M8 3v4M16 3v4M7 16l3-3 2 2 4-4" />
+        </svg>
+      )
+  }
+}

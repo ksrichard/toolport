@@ -38,8 +38,6 @@ pub enum ApiError {
     InvalidBody(#[from] JsonRejection),
     #[error("the route does not exist")]
     NotFound,
-    #[error("the MCP server does not exist")]
-    McpServerNotFound,
     #[error("the database is not available")]
     DatabaseUnavailable(#[source] sqlx::Error),
     #[error("an internal error happened")]
@@ -60,7 +58,7 @@ impl ApiError {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::InvalidBody(_) => StatusCode::BAD_REQUEST,
-            Self::NotFound | Self::McpServerNotFound => StatusCode::NOT_FOUND,
+            Self::NotFound => StatusCode::NOT_FOUND,
             Self::DatabaseUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Database(_) | Self::TokenSigning(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -71,7 +69,6 @@ impl ApiError {
             Self::Unauthorized => "unauthorized",
             Self::InvalidBody(_) => "invalid_body",
             Self::NotFound => "not_found",
-            Self::McpServerNotFound => "mcp_server_not_found",
             Self::DatabaseUnavailable(_) => "database_unavailable",
             Self::Database(_) | Self::TokenSigning(_) => "internal_error",
         }

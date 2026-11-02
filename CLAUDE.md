@@ -150,6 +150,8 @@ Each milestone ends with working code, tests, and a short demo.
    into a server. A re-import of an API replaces its tools and turns them all on again.
 4. Tokens. Make MCP clients send a JWT as a bearer token. Check the signature, the expiry,
    and the `jti` row. Show the token value once, at creation. Allow revoke.
+   Status: done. Until the Tokens page exists, the `mcp-token` binary creates, lists, and
+   revokes tokens. A missing token, a bad token, and an unknown server all get the same 401.
 5. Call log and metrics. Save every call. Compute calls per minute, error rate, p50 and
    p95 latency, and open sessions. Send new calls and metrics to the dashboard over SSE.
 6. Users and dashboard shell. Add sign-in with GitHub (OAuth) and logout. The first
@@ -190,6 +192,8 @@ Each milestone ends with working code, tests, and a short demo.
 - Backend: `cargo run -p server` (`-- --help` lists the settings)
 - Import a spec into a server (dev tool): `cargo run -p server --bin import-spec -- --owner <github-login>
   --server <name> --spec <file-or-url> [--base-url <url>]`. The owner must have signed in once.
+- MCP tokens (dev tool): `cargo run -p server --bin mcp-token -- create --server <name> --name <label>`,
+  also `list --server <name>` and `revoke --id <id>`. It needs `JWT_SECRET` from `.env`.
 - Checks: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
   (the tests need Postgres and `DATABASE_URL`)
 - Frontend: `cd web && npm run dev` (Vite sends `/api`, `/auth`, `/mcp` to `localhost:8080`),

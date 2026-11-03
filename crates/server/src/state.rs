@@ -56,11 +56,12 @@ impl AppState {
             jwt: JwtKeys::new(config.jwt_secret.as_bytes()),
         };
         let secrets =
-            SecretsKey::from_hex(&config.secrets_key).map_err(StartupError::SecretsKey)?;
+            Arc::new(SecretsKey::from_hex(&config.secrets_key).map_err(StartupError::SecretsKey)?);
         let live = Arc::new(LiveHub::default());
         let handler = ToolportMcp::new(
             pool.clone(),
             upstream.clone(),
+            secrets.clone(),
             config.allow_local_upstream,
             Duration::from_millis(config.upstream_timeout_ms),
             live.clone(),
@@ -73,7 +74,7 @@ impl AppState {
             upstream,
             allow_local_upstream: config.allow_local_upstream,
             http,
-            secrets: Arc::new(secrets),
+            secrets,
         })
     }
 }

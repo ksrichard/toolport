@@ -184,12 +184,21 @@ Each milestone ends with working code, tests, and a short demo.
    secrets masked as `••••`. It uses `POST /api/servers/{name}/tool-test`, or `POST /api/tool-test`
    for a draft API in onboarding. Onboarding has "Build a tool by hand" and the
    WAITING/CONNECTED badge. Saving a tool sends `notifications/tools/list_changed`.
+   An imported tool locks the fields that a re-import matches on. "Detach from spec" turns it
+   into a hand-made tool, and a re-import then leaves it alone.
 8. Tools page. List all tools with on/off switches. When a tool changes, send
    `notifications/tools/list_changed` to the open MCP sessions. Keep at least one tool on.
    Status: done. `PUT /api/servers/{name}/tools/{tool}/enabled` turns a tool on or off. The Live
    page and the Tools page use the same switch, and the server refuses to turn off the last tool.
 9. APIs page. Add an API from a spec URL or a file. Set the base URL and the upstream auth
    (none, API key header, or bearer). Re-import a spec and show which tools were added or removed.
+   Add a "Re-import" button for each API. It downloads the spec again from its URL, or asks for
+   a new file when the API came from a file. It shows the report: added, kept (edited), and
+   removed tools.
+   Add an optional daily check for each API from a URL. The server downloads the spec once a day.
+   When the spec changed, it re-imports with the same rule and sends `list_changed`. The APIs page
+   shows the time and result of the last check. The check is off by default.
+   Both need a new column with the spec URL of each API. Today ToolPort stores only the spec text.
    Status: the upstream auth part is done. The APIs page is not.
 10. Tokens page. Create, name, and revoke tokens. Show the last use of each token.
 11. All servers page. Create, rename, and delete servers. Show a short status for each.

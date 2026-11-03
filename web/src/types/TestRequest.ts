@@ -6,4 +6,9 @@ export type TestRequest = { draft: ToolDraft, api: TestApi, args: Record<string,
 /**
  * The name of a saved spec tool of this server. The test then uses its stored request.
  */
-spec_tool?: string, };
+spec_tool?: string, 
+/**
+ * The name of a saved manual tool of this server. Its complex inputs then keep their
+ * stored schema.
+ */
+manual_tool?: string, };

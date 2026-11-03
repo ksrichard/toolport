@@ -1641,3 +1641,222 @@ async fn api_id_from_another_server_is_not_found(pool: PgPool) {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
 }
+
+fn detach_path(tool: &str) -> String {
+    format!("/api/servers/pets/tools/{tool}/detach")
+}
+
+async fn detach(app: &App, tool: &str) -> Value {
+    let (status, view) = app.json("POST", &detach_path(tool), json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    view
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn detach_makes_a_spec_tool_manual(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = petstore_status_view(&app).await;
+    let mut body = save_body(&view);
+    body["draft"]["description"] = json!("My own text");
+    let (status, edited) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["edited"], true);
+
+    let detached = detach(&app, "findPetsByStatus").await;
+    assert_eq!(detached["source"], "manual");
+    assert_eq!(detached["edited"], false);
+    assert_eq!(detached["spec_changed"], false);
+    assert_eq!(detached["api_id"], view["api_id"]);
+    assert_eq!(detached["draft"], edited["draft"]);
+    assert_eq!(detached["preview"], edited["preview"]);
+
+    let row: (String, bool, bool, bool) = sqlx::query_as(
+        "SELECT source, edited, enabled, (spec_tool IS NULL AND spec_hash IS NULL
+                AND edited_hash IS NULL AND operation IS NULL)
+         FROM tools WHERE name = 'findPetsByStatus'",
+    )
+    .fetch_one(&app.state.pool)
+    .await
+    .unwrap();
+    // The spec columns are all NULL.
+    assert_eq!(row, ("manual".into(), false, true, true));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn detach_refuses_a_manual_tool(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    add_forecast(&app).await;
+    let (status, error) = app
+        .json("POST", &detach_path("getForecast"), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+    assert_eq!(error["error"], "not_a_spec_tool");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn detach_of_unknown_or_other_users_tool_is_not_found(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let (status, _) = app
+        .json("POST", &detach_path("noSuchTool"), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let other = common::create_user(&app.state.pool, 2, "other").await;
+    let response = app
+        .as_user(other, "POST", &detach_path("findPetsByStatus"), json!(null))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(petstore_status_view(&app).await["source"], "spec");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn detached_tool_can_change_its_path(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = detach(&app, "getPetById").await;
+    let mut body = save_body(&view);
+    body["draft"]["path"] = json!("/pets/{petId}/details");
+    body["draft"]["method"] = json!("POST");
+    let (status, saved) = app
+        .json("PUT", "/api/servers/pets/tools/getPetById", body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["source"], "manual");
+    assert_eq!(saved["draft"]["path"], "/pets/{petId}/details");
+    assert_eq!(saved["draft"]["method"], "POST");
+    // `petId` has a format, so it is a complex row. Its schema must stay as it was.
+    assert_eq!(saved["preview"], view["preview"]);
+    let listed = Mcp::connect(&app).await.listed("getPetById").await;
+    assert_eq!(listed["inputSchema"], saved["preview"]["inputSchema"]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn detached_tool_keeps_enum_input_on_save(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = detach(&app, "findPetsByStatus").await;
+    let before = view["preview"]["inputSchema"]["properties"]["status"].clone();
+    assert!(before["enum"].is_array(), "{before}");
+
+    let mut body = save_body(&view);
+    let rows = body["draft"]["inputs"].as_array_mut().unwrap();
+    let row = rows.iter_mut().find(|r| r["name"] == "status").unwrap();
+    assert_eq!(row["input_type"], "complex");
+    row["description"] = json!("The pet status");
+    let (status, saved) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    let after = &saved["preview"]["inputSchema"]["properties"]["status"];
+    let mut expected = before.clone();
+    expected["description"] = json!("The pet status");
+    assert_eq!(after, &expected);
+    let (schema,): (Value,) =
+        sqlx::query_as("SELECT input_schema FROM tools WHERE name = 'findPetsByStatus'")
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(schema, saved["preview"]["inputSchema"]);
+    let listed = Mcp::connect(&app).await.listed("findPetsByStatus").await;
+    assert_eq!(listed["inputSchema"], schema);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn detached_tool_refuses_a_new_complex_row(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = detach(&app, "findPetsByStatus").await;
+    let mut body = save_body(&view);
+    body["draft"]["inputs"].as_array_mut().unwrap().push(
+        json!({ "name": "other", "input_type": "complex", "required": false, "description": "" }),
+    );
+    let (status, error) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+    assert_eq!(error["error"], "complex_input_on_manual_tool");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_route_runs_a_detached_tool(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore_at(&app, &fake_petstore().await).await;
+    let view = detach(&app, "getPetById").await;
+    let api = json!({ "kind": "saved", "id": view["api_id"] });
+    let body = json!({
+        "draft": view["draft"], "api": api, "args": { "petId": 7 }, "manual_tool": "getPetById",
+    });
+    let (status, result) = app
+        .json("POST", "/api/servers/pets/tool-test", body.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["mcp"]["isError"], false, "{result}");
+    let text = result["mcp"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("rex"), "{text}");
+
+    // Without the stored tool, the complex row has no schema.
+    let mut plain = body.clone();
+    plain.as_object_mut().unwrap().remove("manual_tool");
+    let (status, error) = app.json("POST", "/api/servers/pets/tool-test", plain).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "complex_input_on_manual_tool");
+    // A spec tool is not a manual tool.
+    let (_, spec) = app
+        .json(
+            "GET",
+            "/api/servers/pets/tools/findPetsByStatus",
+            json!(null),
+        )
+        .await;
+    let body = json!({
+        "draft": spec["draft"], "api": api, "args": {}, "manual_tool": "findPetsByStatus",
+    });
+    let (status, _) = app.json("POST", "/api/servers/pets/tool-test", body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_leaves_a_detached_tool_alone(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = detach(&app, "findPetsByStatus").await;
+
+    // The spec still has the operation, so the import adds it again under the same name.
+    let error = import_spec(
+        &app.state.pool,
+        ImportRequest {
+            owner: Owner::Login("octocat"),
+            server: "pets",
+            api_name: None,
+            spec_text: PETSTORE,
+            base_url: Some("https://petstore.example/api/v3".parse().unwrap()),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&error, server::import::ImportError::ToolNameTaken(names) if names == &["findPetsByStatus".to_owned()]),
+        "{error}"
+    );
+    assert_eq!(petstore_status_view(&app).await, view);
+
+    // With a new name, the import adds a new spec tool next to the detached one.
+    let mut body = save_body(&view);
+    body["draft"]["name"] = json!("myStatus");
+    let (status, mine) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{mine}");
+    let report = reimport(&app, PETSTORE).await;
+    assert!(report.tools.contains(&"findPetsByStatus".to_owned()));
+    assert!(!report.tools.contains(&"myStatus".to_owned()));
+    let (_, after) = app
+        .json("GET", "/api/servers/pets/tools/myStatus", json!(null))
+        .await;
+    assert_eq!(after, mine);
+    assert_eq!(petstore_status_view(&app).await["source"], "spec");
+}

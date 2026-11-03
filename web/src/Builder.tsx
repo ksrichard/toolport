@@ -8,6 +8,7 @@ import {
   createServerWithTool,
   createTool,
   deleteTool,
+  detachTool,
   getApis,
   getTool,
   resetTool,
@@ -91,6 +92,26 @@ function specSchema(preview: unknown, rows: InputRow[]): Schema {
   if (required.length > 0) schema.required = required
   else delete schema.required
   return schema
+}
+
+/** A tool detached from a spec can keep complex inputs. The server keeps their stored
+ * property and applies only the description, so the preview does the same. */
+function keepComplex(schema: Schema, preview: unknown, rows: InputRow[]): Schema {
+  const stored = (preview as { inputSchema?: { properties?: Schema } } | null)?.inputSchema?.properties ?? {}
+  const properties: Schema = { ...(schema.properties as Schema) }
+  for (const row of rows) {
+    const property = stored[row.name]
+    if (row.input_type !== 'complex' || property === undefined) continue
+    if (typeof property !== 'object' || property === null || Array.isArray(property)) {
+      properties[row.name] = property
+      continue
+    }
+    const next = { ...(property as Schema) }
+    if (row.description === '') delete next.description
+    else next.description = row.description
+    properties[row.name] = next
+  }
+  return { ...schema, properties }
 }
 
 function sortKeys(value: unknown): unknown {
@@ -261,7 +282,10 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
   const pathNames = pathPlaceholders(path)
   const placeholders = pathPlaceholders(path).filter((p) => !filledRows.some((r) => r.name === p))
 
-  const schema = isSpec && initial ? specSchema(initial.preview, filledRows) : schemaFromRows(filledRows, body)
+  let schema: Schema
+  if (isSpec && initial) schema = specSchema(initial.preview, filledRows)
+  else if (initial) schema = keepComplex(schemaFromRows(filledRows, body), initial.preview, filledRows)
+  else schema = schemaFromRows(filledRows, body)
   // The server sends the keys of inputSchema in sorted order, so the preview sorts them too.
   const preview = toolJson(name.trim(), about, sortKeys(schema) as Schema)
 
@@ -350,6 +374,13 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       onSaved({ kind: 'tool', tool: await resetTool(server, initial.draft.name), reset: true })
     })
 
+  const detach = () =>
+    run(async () => {
+      if (server === null || !initial) return
+      if (!window.confirm('Detach this tool from the spec? A re-import will no longer update it. This cannot be undone.')) return
+      onSaved({ kind: 'tool', tool: await detachTool(server, initial.draft.name), reset: true })
+    })
+
   const remove = () =>
     run(async () => {
       if (server === null || !initial) return
@@ -371,7 +402,14 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       let testApi: TestApi
       if (apiId === null) testApi = { kind: 'draft', base_url: baseUrl.trim(), auth: authInput(auth) }
       else testApi = { kind: 'saved', id: apiId, auth: apiIsSpec || !apiDirty ? undefined : authInput(auth) }
-      const request = { draft: buildDraft(), api: testApi, args, spec_tool: isSpec && initial ? initial.draft.name : undefined }
+      const stored = initial ? initial.draft.name : undefined
+      const request = {
+        draft: buildDraft(),
+        api: testApi,
+        args,
+        spec_tool: isSpec ? stored : undefined,
+        manual_tool: isSpec ? undefined : stored,
+      }
       setResult(server === null ? await testDraftTool(request) : await testTool(server, request))
     })
 
@@ -398,6 +436,14 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
             </button>
           </h2>
 
+          {isSpec && (
+            <div className="spec-note">
+              <span className="muted">These fields come from the spec, so a re-import can update them.</span>
+              <button className="btn" type="button" onClick={detach} disabled={busy}>
+                Detach from spec
+              </button>
+            </div>
+          )}
           {onboarding && (
             <Row label="server">
               <input value={serverName} onChange={(e) => setServerName(e.target.value)} placeholder="my-server" aria-label="Server name" />
@@ -544,22 +590,23 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                 </thead>
                 <tbody>
                   {rows.map((r, i) => {
-                    const fixed = isSpec && r.input_type === 'complex'
+                    const complex = r.input_type === 'complex'
+                    const fixed = isSpec && complex
                     const inPath = isSpec && pathNames.includes(r.name)
                     return (
                       <tr key={i}>
                         <td>
-                          <input value={r.name} onChange={(e) => patchRow(i, { name: e.target.value })} readOnly={isSpec} aria-label="Input name" />
+                          <input value={r.name} onChange={(e) => patchRow(i, { name: e.target.value })} readOnly={isSpec || complex} aria-label="Input name" />
                         </td>
                         <td>
-                          <select value={r.input_type} onChange={(e) => patchRow(i, { input_type: e.target.value as InputType })} disabled={isSpec} aria-label="Input type">
+                          <select value={r.input_type} onChange={(e) => patchRow(i, { input_type: e.target.value as InputType })} disabled={isSpec || complex} aria-label="Input type">
                             {INPUT_TYPES.filter((t) => t !== 'complex' || r.input_type === 'complex').map((t) => (
                               <option key={t}>{t}</option>
                             ))}
                           </select>
                         </td>
                         <td>
-                          <input type="checkbox" checked={r.required} onChange={(e) => patchRow(i, { required: e.target.checked })} disabled={fixed || inPath} aria-label="Required" />
+                          <input type="checkbox" checked={r.required} onChange={(e) => patchRow(i, { required: e.target.checked })} disabled={complex || inPath} aria-label="Required" />
                         </td>
                         <td>
                           <input value={r.description} onChange={(e) => patchRow(i, { description: e.target.value })} readOnly={fixed} aria-label="Input description" />

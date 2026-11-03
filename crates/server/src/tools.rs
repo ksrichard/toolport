@@ -123,6 +123,10 @@ pub struct TestRequest {
     /// The name of a saved spec tool of this server. The test then uses its stored request.
     #[ts(optional)]
     pub spec_tool: Option<String>,
+    /// The name of a saved manual tool of this server. Its complex inputs then keep their
+    /// stored schema.
+    #[ts(optional)]
+    pub manual_tool: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -184,6 +188,7 @@ pub fn routes() -> Router<AppState> {
             get(get_tool).put(update_tool).delete(delete_tool),
         )
         .route("/servers/{name}/tools/{tool}/reset", post(reset_tool))
+        .route("/servers/{name}/tools/{tool}/detach", post(detach_tool))
         .route(
             "/servers/{name}/tools/{tool}/enabled",
             put(set_tool_enabled),
@@ -236,11 +241,25 @@ pub struct CreateServerWithTool {
 /// - Each `key={x}` in the query is a query input. `key` is sent when it differs from `x`.
 /// - A header value of exactly `{x}` is a header input. Other values are fixed headers.
 pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
+    manual_tool_def(draft, None)
+}
+
+/// `stored` is the input schema of the saved tool. A tool detached from a spec can have
+/// complex inputs. The table cannot rebuild them, so they keep their stored schema.
+fn manual_tool_def(
+    draft: &ToolDraft,
+    stored: Option<&Map<String, Value>>,
+) -> Result<ToolDef, DraftError> {
+    let stored_property = |name: &str| {
+        stored
+            .and_then(|schema| schema.get("properties"))
+            .and_then(|properties| properties.get(name))
+    };
     let name = valid_tool_name(&draft.name)?;
     if let Some(row) = draft
         .inputs
         .iter()
-        .find(|r| r.input_type == InputType::Complex)
+        .find(|r| r.input_type == InputType::Complex && stored_property(&r.name).is_none())
     {
         return Err(DraftError::ComplexInput(row.name.clone()));
     }
@@ -298,10 +317,29 @@ pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
         }
     }
 
+    let mut input_schema = schema_from_rows(&draft.inputs, draft.body_schema.as_ref());
+    if let Some(Value::Object(properties)) = input_schema.get_mut("properties") {
+        let complex = draft
+            .inputs
+            .iter()
+            .filter(|r| r.input_type == InputType::Complex);
+        for row in complex {
+            let mut property = stored_property(&row.name).cloned().unwrap_or_default();
+            if let Value::Object(fields) = &mut property {
+                if row.description.is_empty() {
+                    fields.remove("description");
+                } else {
+                    fields.insert("description".into(), row.description.clone().into());
+                }
+            }
+            properties.insert(row.name.clone(), property);
+        }
+    }
+
     Ok(ToolDef {
         name: name.to_owned(),
         description: draft.description.clone(),
-        input_schema: schema_from_rows(&draft.inputs, draft.body_schema.as_ref()),
+        input_schema,
         request: RequestTemplate {
             method: draft.method,
             path: draft.path.clone(),
@@ -604,7 +642,7 @@ async fn run_test(
             spec_tool_def(&schema, &request, &body.draft)?
         }
         (Some(_), None) => return Err(ApiError::NotFound),
-        (None, _) => draft_to_tool(&body.draft)?,
+        (None, _) => manual_def(state, server_id, body.manual_tool.as_deref(), &body.draft).await?,
     };
 
     let (target, new_secret) = match body.api {
@@ -666,6 +704,25 @@ async fn run_test(
         mcp,
         http: output.trace,
     })
+}
+
+/// The tool of a manual draft. With `saved`, the stored schema of that manual tool keeps
+/// the complex inputs, as a save of the tool would.
+async fn manual_def(
+    state: &AppState,
+    server_id: Option<i64>,
+    saved: Option<&str>,
+    draft: &ToolDraft,
+) -> Result<ToolDef, ApiError> {
+    let Some(name) = saved else {
+        return Ok(draft_to_tool(draft)?);
+    };
+    let server_id = server_id.ok_or(ApiError::NotFound)?;
+    let (_, _, _, _, Db(schema), _, source, ..) = fetch_tool(&state.pool, server_id, name).await?;
+    if source != "manual" {
+        return Err(ApiError::NotAManualTool);
+    }
+    Ok(manual_tool_def(draft, Some(&schema))?)
 }
 
 fn target_of(
@@ -920,7 +977,7 @@ async fn update_tool(
         .map_err(tool_name_taken(&def.name))?;
         def.name
     } else {
-        let def = draft_to_tool(&body.draft)?;
+        let def = manual_tool_def(&body.draft, Some(&schema))?;
         api_in_server(&state.pool, server_id, body.api_id).await?;
         sqlx::query(
             "UPDATE tools SET api_id = $1, name = $2, description = $3, input_schema = $4,
@@ -969,6 +1026,33 @@ async fn reset_tool(
     .map_err(tool_name_taken(&original.name))?;
     state.peers.notify_tools_changed(server_id).await;
     let row = fetch_tool(&state.pool, server_id, &original.name).await?;
+    Ok(Json(row_view(row)))
+}
+
+/// Turns a spec tool into a manual tool. A re-import then no longer updates it.
+async fn detach_tool(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((name, tool)): Path<(String, String)>,
+) -> Result<Json<ToolView>, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let detached = sqlx::query(
+        "UPDATE tools SET source = 'manual', edited = false, spec_tool = NULL, spec_hash = NULL,
+                edited_hash = NULL, operation = NULL
+         WHERE server_id = $1 AND name = $2 AND source = 'spec'",
+    )
+    .bind(server_id)
+    .bind(&tool)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::Database)?;
+    if detached.rows_affected() == 0 {
+        // Gives 404 for an unknown tool.
+        fetch_tool(&state.pool, server_id, &tool).await?;
+        return Err(ApiError::NotASpecTool);
+    }
+    // The tools/list entry does not change, so the open sessions need no notice.
+    let row = fetch_tool(&state.pool, server_id, &tool).await?;
     Ok(Json(row_view(row)))
 }
 

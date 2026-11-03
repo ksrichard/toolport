@@ -161,7 +161,7 @@ export function Onboarding({ existing, onCancel, onChanged, onDone }: Onboarding
       <div className="steps-row">
         <ol className="steps" aria-label="Progress">
           {STEPS.map((s, i) => (
-            <li key={s.id} aria-current={s.id === step ? 'step' : undefined}>
+            <li key={s.id} aria-current={s.id === (step === 'build' ? 'name' : step) ? 'step' : undefined}>
               {i > 0 && <Arrow />}
               <span className="chip">{s.label}</span>
             </li>
@@ -397,6 +397,7 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
           </div>
           <ConnectionBadge
             server={server.name}
+            tokenName={token.name}
             command={snippet(client, server, token.token)}
             hint={client === 'Claude Code' ? 'Paste this into your terminal:' : WHERE[client]}
           />
@@ -426,12 +427,14 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
 }
 
 /** One card with two states. It flips to CONNECTED on the first MCP request of a new client. */
-function ConnectionBadge({ server, command, hint }: { server: string; command: string; hint: string }) {
+function ConnectionBadge({ server, tokenName, command, hint }: { server: string; tokenName: string; command: string; hint: string }) {
   const live = useLiveStream(server, false)
-  const first = live.firstRequest
+  // Only a request with the token of this page counts.
+  const first = live.firstRequests.find((r) => r.token_name === tokenName)
   // After a page reload, the snapshot still lists the client, but the first request event is gone.
-  const client = first?.client_name ?? live.clients[0]?.client_name
-  const connected = first !== null || live.clients.length > 0
+  const known = live.clients.find((c) => c.token_name === tokenName)
+  const client = first?.client_name ?? known?.client_name
+  const connected = first !== undefined || known !== undefined
   const detail = first
     ? first.tools_sent === undefined
       ? first.method

@@ -275,9 +275,7 @@ async fn import_api(
             },
         )
         .await?;
-        if report.replaced {
-            state.peers.notify_tools_changed(server_id).await;
-        }
+        state.peers.notify_tools_changed(server_id).await;
         imported.push(ImportedApi {
             name: report.api_name,
             base_url: report.base_url.to_string(),

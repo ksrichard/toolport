@@ -120,6 +120,9 @@ pub struct TestRequest {
     pub api: TestApi,
     #[ts(type = "Record<string, unknown>")]
     pub args: Map<String, Value>,
+    /// The name of a saved spec tool of this server. The test then uses its stored request.
+    #[ts(optional)]
+    pub spec_tool: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -145,6 +148,12 @@ pub enum DraftError {
     ComplexInput(String),
     #[error("the input name body is reserved for the request body")]
     ReservedInputName,
+    #[error(
+        "the input name {0} must start with a letter or `_` and have 1 to 64 letters, digits, `_`, or `-`"
+    )]
+    InvalidInputName(String),
+    #[error("put credentials in the API auth, not in a fixed header")]
+    SecretInFixedHeader(String),
 }
 
 impl DraftError {
@@ -156,6 +165,8 @@ impl DraftError {
             Self::BadQueryTemplate(_) => "bad_query_template",
             Self::ComplexInput(_) => "complex_input_on_manual_tool",
             Self::ReservedInputName => "reserved_input_name",
+            Self::InvalidInputName(_) => "invalid_input_name",
+            Self::SecretInFixedHeader(_) => "secret_in_fixed_header",
         }
     }
 }
@@ -223,6 +234,9 @@ pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
     {
         return Err(DraftError::ComplexInput(row.name.clone()));
     }
+    if let Some(row) = draft.inputs.iter().find(|r| !valid_input_name(&r.name)) {
+        return Err(DraftError::InvalidInputName(row.name.clone()));
+    }
     if draft.body_schema.is_some() && draft.inputs.iter().any(|r| r.name == BODY_ARGUMENT) {
         return Err(DraftError::ReservedInputName);
     }
@@ -267,6 +281,9 @@ pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
                 name: input.to_owned(),
                 location: ParamLocation::Header,
             }),
+            _ if is_secret_header(&header.name) => {
+                return Err(DraftError::SecretInFixedHeader(header.name.clone()));
+            }
             _ => fixed_headers.push((header.name.clone(), header.value.clone())),
         }
     }
@@ -286,6 +303,25 @@ pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
             fixed_headers,
         },
     })
+}
+
+/// The same rule is in `web/src/Builder.tsx`. `__proto__` would break the page preview.
+fn valid_input_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && name != "__proto__"
+}
+
+/// A fixed header is stored and shown as plain text, so it must not carry credentials.
+fn is_secret_header(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    ["key", "token", "secret", "auth", "cookie"]
+        .iter()
+        .any(|word| name.contains(word))
 }
 
 fn valid_tool_name(text: &str) -> Result<&str, DraftError> {
@@ -548,7 +584,18 @@ async fn run_test(
     server_id: Option<i64>,
     body: TestRequest,
 ) -> Result<TestResult, ApiError> {
-    let tool = draft_to_tool(&body.draft)?;
+    let tool = match (&body.spec_tool, server_id) {
+        (Some(name), Some(server_id)) => {
+            let row = fetch_tool(&state.pool, server_id, name).await?;
+            let (_, _, _, _, Db(schema), Db(request), source, ..) = row;
+            if source != "spec" {
+                return Err(ApiError::NotASpecTool);
+            }
+            spec_tool_def(&schema, &request, &body.draft)?
+        }
+        (Some(_), None) => return Err(ApiError::NotFound),
+        (None, _) => draft_to_tool(&body.draft)?,
+    };
 
     let (target, new_secret) = match body.api {
         TestApi::Draft { base_url, auth } => {
@@ -785,6 +832,55 @@ async fn create_tool(
     Ok((StatusCode::CREATED, Json(row_view(row))))
 }
 
+/// The stored spec tool with the name, description, and input rows of the draft.
+/// Only these can change. The rows also set `required` on the query and header inputs.
+fn spec_tool_def(
+    schema: &Map<String, Value>,
+    request: &RequestTemplate,
+    draft: &ToolDraft,
+) -> Result<ToolDef, ApiError> {
+    let stored = stored_draft("", "", schema, request);
+    let same = draft.method == stored.method
+        && draft.path == stored.path
+        && draft.query == stored.query
+        && draft.headers == stored.headers
+        && draft.body_schema == stored.body_schema;
+    if !same {
+        return Err(ApiError::SpecToolFixed);
+    }
+    let name = valid_tool_name(&draft.name)?;
+    if request.body.is_some() && draft.inputs.iter().any(|r| r.name == BODY_ARGUMENT) {
+        return Err(DraftError::ReservedInputName.into());
+    }
+    // The request template maps inputs by name, so the names cannot change.
+    let mut old_names: Vec<&str> = stored.inputs.iter().map(|r| r.name.as_str()).collect();
+    let mut new_names: Vec<&str> = draft.inputs.iter().map(|r| r.name.as_str()).collect();
+    old_names.sort_unstable();
+    new_names.sort_unstable();
+    if old_names != new_names {
+        return Err(ApiError::SpecToolFixed);
+    }
+    let mut request = request.clone();
+    for param in &mut request.params {
+        let Some(row) = draft.inputs.iter().find(|r| r.name == param.name) else {
+            continue;
+        };
+        if param.location == ParamLocation::Path {
+            if !row.required {
+                return Err(DraftError::PathInputOptional(param.name.clone()).into());
+            }
+        } else {
+            param.required = row.required;
+        }
+    }
+    Ok(ToolDef {
+        name: name.to_owned(),
+        description: draft.description.clone(),
+        input_schema: apply_rows(schema, &draft.inputs),
+        request,
+    })
+}
+
 async fn update_tool(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -795,44 +891,24 @@ async fn update_tool(
     let row = fetch_tool(&state.pool, server_id, &tool).await?;
     let (id, api_id, _, _, Db(schema), Db(request), source, _, _, _) = row;
     let new_name = if source == "spec" {
-        // Only the name, the description, and the input table can change.
-        let stored = stored_draft("", "", &schema, &request);
-        let draft = &body.draft;
-        let same = body.api_id == api_id
-            && draft.method == stored.method
-            && draft.path == stored.path
-            && draft.query == stored.query
-            && draft.headers == stored.headers
-            && draft.body_schema == stored.body_schema;
-        if !same {
+        if body.api_id != api_id {
             return Err(ApiError::SpecToolFixed);
         }
-        let new_name = valid_tool_name(&draft.name)?;
-        if request.body.is_some() && draft.inputs.iter().any(|r| r.name == BODY_ARGUMENT) {
-            return Err(DraftError::ReservedInputName.into());
-        }
-        // The request template maps inputs by name, so the names cannot change.
-        let mut old_names: Vec<&str> = stored.inputs.iter().map(|r| r.name.as_str()).collect();
-        let mut new_names: Vec<&str> = draft.inputs.iter().map(|r| r.name.as_str()).collect();
-        old_names.sort_unstable();
-        new_names.sort_unstable();
-        if old_names != new_names {
-            return Err(ApiError::SpecToolFixed);
-        }
-        let rows = draft.inputs.clone();
+        let def = spec_tool_def(&schema, &request, &body.draft)?;
         sqlx::query(
-            "UPDATE tools SET name = $1, description = $2, input_schema = $3, edited = true,
-                    edited_hash = spec_hash
-             WHERE id = $4",
+            "UPDATE tools SET name = $1, description = $2, input_schema = $3, request = $4,
+                    edited = true, edited_hash = spec_hash
+             WHERE id = $5",
         )
-        .bind(new_name)
-        .bind(&draft.description)
-        .bind(Db(apply_rows(&schema, &rows)))
+        .bind(&def.name)
+        .bind(&def.description)
+        .bind(Db(&def.input_schema))
+        .bind(Db(&def.request))
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(tool_name_taken(new_name))?;
-        new_name.to_owned()
+        .map_err(tool_name_taken(&def.name))?;
+        def.name
     } else {
         let def = draft_to_tool(&body.draft)?;
         api_in_server(&state.pool, server_id, body.api_id).await?;

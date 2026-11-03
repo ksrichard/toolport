@@ -246,6 +246,8 @@ pub enum Outcome {
     },
     TimedOut,
     Failed,
+    /// The resolver or a redirect hit a blocked address.
+    Blocked,
 }
 
 impl Outcome {
@@ -254,7 +256,7 @@ impl Outcome {
             Self::Answered { status, .. } if status.is_success() => "ok",
             Self::Answered { .. } => "upstream_error",
             Self::TimedOut => "timed_out",
-            Self::Failed => "request_failed",
+            Self::Failed | Self::Blocked => "request_failed",
         }
     }
 
@@ -264,7 +266,7 @@ impl Outcome {
             Self::Answered { status, .. } if *status == StatusCode::NOT_FOUND => {
                 CallResult::NotFound
             }
-            Self::Answered { .. } | Self::Failed => CallResult::UpstreamError,
+            Self::Answered { .. } | Self::Failed | Self::Blocked => CallResult::UpstreamError,
             Self::TimedOut => CallResult::TimedOut,
         }
     }
@@ -272,7 +274,7 @@ impl Outcome {
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::Answered { status, .. } => Some(*status),
-            Self::TimedOut | Self::Failed => None,
+            Self::TimedOut | Self::Failed | Self::Blocked => None,
         }
     }
 
@@ -304,6 +306,7 @@ impl Outcome {
             Self::Failed => CallToolResult::error(vec![ContentBlock::text(
                 "the upstream API cannot be reached",
             )]),
+            Self::Blocked => blocked_result(),
         }
     }
 }
@@ -342,13 +345,27 @@ async fn send(builder: reqwest::RequestBuilder) -> (Outcome, Option<TracedRespon
         Err(error) => Err(error),
     };
     result.unwrap_or_else(|error| {
-        if error.is_timeout() {
+        if is_blocked(&error) {
+            (Outcome::Blocked, None)
+        } else if error.is_timeout() {
             (Outcome::TimedOut, None)
         } else {
             tracing::warn!(error = %error_chain(&error), "upstream request failed");
             (Outcome::Failed, None)
         }
     })
+}
+
+/// The guarded resolver and the redirect policy report a blocked address as the error source.
+fn is_blocked(error: &reqwest::Error) -> bool {
+    let mut source = std::error::Error::source(error);
+    while let Some(inner) = source {
+        if inner.is::<crate::upstream_guard::BlockedAddress>() {
+            return true;
+        }
+        source = inner.source();
+    }
+    false
 }
 
 /// Reads at most `MAX_RESPONSE_BYTES`. The bool is true when the body was longer.

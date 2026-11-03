@@ -8,6 +8,7 @@ use axum::{
     response::Response,
     routing::get,
 };
+use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use server::{
     import::{ImportRequest, Owner, import_spec},
@@ -1122,4 +1123,388 @@ async fn user_test_route_rejects_a_saved_api(pool: PgPool) {
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(error["error"], "invalid_test_call");
+}
+
+// ---- final review fixes ----
+
+/// A fake Petstore. It answers the paths that the tests below call.
+async fn fake_petstore() -> String {
+    let app = Router::new()
+        .route(
+            "/api/v3/pet/{id}",
+            get(
+                |axum::extract::Path(id): axum::extract::Path<String>| async move {
+                    Json(json!({ "id": id, "name": "rex" }))
+                },
+            ),
+        )
+        .route(
+            "/api/v3/pet/findByStatus",
+            get(|RawQuery(query): RawQuery| async move { Json(json!({ "query": query })) }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/api/v3")
+}
+
+async fn import_petstore_at(app: &App, base_url: &str) {
+    import_spec(
+        &app.state.pool,
+        ImportRequest {
+            owner: Owner::Login("octocat"),
+            server: "pets",
+            api_name: None,
+            spec_text: PETSTORE,
+            base_url: Some(base_url.parse().unwrap()),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_route_runs_a_spec_tool(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore_at(&app, &fake_petstore().await).await;
+    let (_, view) = app
+        .json("GET", "/api/servers/pets/tools/getPetById", json!(null))
+        .await;
+    let api = json!({ "kind": "saved", "id": view["api_id"] });
+    let body = json!({
+        "draft": view["draft"], "api": api, "args": { "petId": 7 }, "spec_tool": "getPetById",
+    });
+    let (status, result) = app
+        .json("POST", "/api/servers/pets/tool-test", body.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["mcp"]["isError"], false, "{result}");
+    let text = result["mcp"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("rex"), "{text}");
+
+    // The draft must still follow the stored tool.
+    let mut changed = body.clone();
+    changed["draft"]["path"] = json!("/other");
+    let (status, error) = app
+        .json("POST", "/api/servers/pets/tool-test", changed)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "spec_tool_fixed");
+    // The no-server route cannot use a stored tool.
+    let (status, _) = app.json("POST", "/api/tool-test", body).await;
+    assert_ne!(status, StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn clearing_required_on_a_query_input_reaches_the_call(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore_at(&app, &fake_petstore().await).await;
+    let view = petstore_status_view(&app).await;
+    let mut body = save_body(&view);
+    let inputs = body["draft"]["inputs"].as_array_mut().unwrap();
+    inputs
+        .iter_mut()
+        .find(|row| row["name"] == "status")
+        .unwrap()["required"] = json!(false);
+    let (status, saved) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    let (stored,): (Value,) =
+        sqlx::query_as("SELECT request FROM tools WHERE name = 'findPetsByStatus'")
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored["params"][0]["required"], false, "{stored}");
+    let mcp = Mcp::connect(&app).await;
+    let result = mcp
+        .request(
+            "tools/call",
+            json!({ "name": "findPetsByStatus", "arguments": {} }),
+        )
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn clearing_required_on_a_path_input_is_refused(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let (_, view) = app
+        .json("GET", "/api/servers/pets/tools/getPetById", json!(null))
+        .await;
+    let mut body = save_body(&view);
+    body["draft"]["inputs"][0]["required"] = json!(false);
+    let (status, error) = app
+        .json("PUT", "/api/servers/pets/tools/getPetById", body)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "path_input_optional");
+}
+
+async fn blocked_text(app: &App, base_url: &str, path: &str) -> Value {
+    let api = json!({ "kind": "draft", "base_url": base_url, "auth": { "type": "none" } });
+    let mut body = test_body("latitude={lat}", api);
+    body["draft"]["path"] = json!(path);
+    let (status, result) = app.json("POST", "/api/servers/pets/tool-test", body).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    result
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn name_that_resolves_to_loopback_gives_the_blocked_text(pool: PgPool) {
+    let app = App::new(pool, false).await;
+    let base = fake_upstream().await.replace("127.0.0.1", "localhost");
+    let result = blocked_text(&app, &base, "/forecast").await;
+    assert_eq!(result["mcp"]["isError"], true);
+    assert_eq!(
+        result["mcp"]["content"][0]["text"],
+        "the upstream address is not allowed"
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn redirect_to_a_blocked_address_gives_the_blocked_text(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = Router::new().route(
+        "/v1/redirect",
+        get(|| async {
+            (
+                StatusCode::FOUND,
+                [(header::LOCATION, "http://169.254.169.254/")],
+            )
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let result = blocked_text(&app, &format!("http://{addr}/v1"), "/redirect").await;
+    assert_eq!(result["mcp"]["isError"], true);
+    assert_eq!(
+        result["mcp"]["content"][0]["text"],
+        "the upstream address is not allowed"
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn fixed_headers_with_credentials_are_refused(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let api_id = app.create_api(&fake_upstream().await, SECRET).await;
+    for name in [
+        "Authorization",
+        "proxy-authorization",
+        "Cookie",
+        "X-Api-Key",
+        "X-Access-Token",
+        "x-client-secret",
+        "X-Auth-User",
+    ] {
+        let mut draft = forecast_draft();
+        draft["headers"] = json!([{ "name": name, "value": "abc" }]);
+        let (status, error) = app
+            .json(
+                "POST",
+                "/api/servers/pets/tools",
+                json!({ "api_id": api_id, "draft": draft }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{name}");
+        assert_eq!(error["error"], "secret_in_fixed_header", "{name}");
+        assert_eq!(
+            error["message"],
+            "put credentials in the API auth, not in a fixed header"
+        );
+    }
+    // A header that takes its value from an input is not a fixed header.
+    let mut draft = forecast_draft();
+    draft["headers"] = json!([{ "name": "X-Api-Key", "value": "{lat}" }]);
+    let (status, _) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": draft }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    // A harmless fixed header is fine.
+    let mut draft = forecast_draft();
+    draft["name"] = json!("second");
+    draft["headers"] = json!([{ "name": "Accept-Language", "value": "en" }]);
+    let (status, _) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": draft }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn first_import_of_an_api_notifies_the_open_sessions(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let mcp = Mcp::connect(&app).await;
+    // The session is known to the server after its first tools request.
+    mcp.request("tools/list", json!({})).await;
+    let request = Request::get("/mcp/pets")
+        .header(header::HOST, HOST)
+        .header(header::ACCEPT, "text/event-stream")
+        .header(header::AUTHORIZATION, format!("Bearer {}", mcp.token))
+        .header("mcp-session-id", &mcp.session)
+        .body(Body::empty())
+        .unwrap();
+    let mut stream = app
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .unwrap()
+        .into_body();
+
+    // A new API, not a re-import.
+    let body = json!({ "source": "text", "spec": PETSTORE, "base_url": "https://a.example/v3" });
+    let (status, imported) = app.json("POST", "/api/servers/pets/apis", body).await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    assert_eq!(imported[0]["replaced"], false);
+
+    let mut seen = String::new();
+    while !seen.contains("notifications/tools/list_changed") {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.frame())
+            .await
+            .expect("no event in 5 s")
+            .expect("stream ended")
+            .unwrap();
+        if let Some(data) = frame.data_ref() {
+            seen.push_str(&String::from_utf8_lossy(data));
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn invalid_input_names_are_refused(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let api_id = app.create_api(&fake_upstream().await, SECRET).await;
+    for name in ["__proto__", "1abc", "a b", "a.b", "", &"a".repeat(65)] {
+        let mut draft = forecast_draft();
+        draft["query"] = json!("");
+        draft["inputs"] = json!([
+            { "name": name, "input_type": "string", "required": false, "description": "" }
+        ]);
+        let (status, error) = app
+            .json(
+                "POST",
+                "/api/servers/pets/tools",
+                json!({ "api_id": api_id, "draft": draft }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{name}");
+        assert_eq!(error["error"], "invalid_input_name", "{name}");
+    }
+    let mut draft = forecast_draft();
+    draft["query"] = json!("");
+    draft["inputs"] = json!([
+        { "name": "_a-1", "input_type": "string", "required": false, "description": "" }
+    ]);
+    let (status, _) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": draft }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn other_users_cannot_touch_tools_or_test_routes(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let (api_id, _) = add_forecast(&app).await;
+    import_petstore(&app).await;
+    let other = common::create_user(&app.state.pool, 2, "other").await;
+    let (_, spec_view) = app
+        .json("GET", "/api/servers/pets/tools/getPetById", json!(null))
+        .await;
+    let calls = [
+        ("GET", "/api/servers/pets/tools/getForecast", json!(null)),
+        (
+            "PUT",
+            "/api/servers/pets/tools/getForecast",
+            json!({ "api_id": api_id, "draft": forecast_draft() }),
+        ),
+        ("DELETE", "/api/servers/pets/tools/getForecast", json!(null)),
+        (
+            "POST",
+            "/api/servers/pets/tools/getPetById/reset",
+            json!(null),
+        ),
+        (
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": forecast_draft() }),
+        ),
+        (
+            "POST",
+            "/api/servers/pets/tool-test",
+            json!({
+                "draft": forecast_draft(), "args": { "lat": 1, "lon": 2 },
+                "api": { "kind": "saved", "id": api_id },
+            }),
+        ),
+        (
+            "POST",
+            "/api/servers/pets/tool-test",
+            json!({
+                "draft": spec_view["draft"], "args": { "petId": 1 },
+                "api": { "kind": "saved", "id": spec_view["api_id"] },
+                "spec_tool": "getPetById",
+            }),
+        ),
+        ("GET", "/api/servers/pets/apis", json!(null)),
+        (
+            "POST",
+            "/api/servers/pets/apis/manual",
+            json!({ "name": "x", "base_url": "https://a.example", "auth": { "type": "none" } }),
+        ),
+    ];
+    for (method, path, body) in calls {
+        let response = app.as_user(other, method, path, body).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+    }
+    // The route without a server never reads a saved API.
+    let body = json!({
+        "draft": forecast_draft(), "args": { "lat": 1, "lon": 2 },
+        "api": { "kind": "saved", "id": api_id },
+    });
+    let response = app.as_user(other, "POST", "/api/tool-test", body).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // The owner's data is unchanged.
+    let (status, _) = app
+        .json("GET", "/api/servers/pets/tools/getForecast", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn api_id_from_another_server_is_not_found(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    sqlx::query("INSERT INTO servers (user_id, name) VALUES ($1, 'second')")
+        .bind(app.user)
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+    let body = json!({
+        "name": "weather", "base_url": "https://a.example/v1", "auth": { "type": "none" },
+    });
+    let (_, api) = app
+        .json("POST", "/api/servers/second/apis/manual", body)
+        .await;
+    let (status, error) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api["id"], "draft": forecast_draft() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
 }

@@ -86,15 +86,14 @@ pub fn rows_from_schema(schema: &Map<String, Value>) -> Vec<InputRow> {
 /// and the `type` of simple properties. Every other key stays as the spec has it.
 pub fn apply_rows(schema: &Map<String, Value>, rows: &[InputRow]) -> Map<String, Value> {
     let mut out = schema.clone();
-    let mut known = Vec::new();
     if let Some(Value::Object(properties)) = out.get_mut("properties") {
         for row in rows {
             let Some(Value::Object(property)) = properties.get_mut(&row.name) else {
                 continue;
             };
-            known.push(row);
             set_description(property, &row.description);
-            if row.input_type == InputType::Complex {
+            // Never change the type of a property that the table cannot show.
+            if row.input_type == InputType::Complex || is_complex(property) {
                 continue;
             }
             if row.input_type == InputType::StringArray
@@ -105,10 +104,16 @@ pub fn apply_rows(schema: &Map<String, Value>, rows: &[InputRow]) -> Map<String,
             set_type(property, row.input_type);
         }
     }
-    let required: Vec<&str> = known
-        .iter()
-        .filter(|row| row.required)
-        .map(|row| row.name.as_str())
+    // Names without a row stay as the spec has them.
+    let old: Vec<&str> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let required: Vec<&str> = old
+        .into_iter()
+        .filter(|name| !rows.iter().any(|row| row.name == *name))
+        .chain(required_names(rows))
         .collect();
     if required.is_empty() {
         out.remove("required");
@@ -189,6 +194,10 @@ fn set_type(property: &mut Map<String, Value>, input_type: InputType) {
     }
 }
 
+fn is_complex(property: &Map<String, Value>) -> bool {
+    input_type_of(&Value::Object(property.clone())) == InputType::Complex
+}
+
 fn input_type_of(property: &Value) -> InputType {
     const COMPLEX_KEYS: [&str; 5] = ["enum", "format", "$ref", "oneOf", "anyOf"];
     let Some(property) = property.as_object() else {
@@ -206,8 +215,13 @@ fn input_type_of(property: &Value) -> InputType {
         Some("number") => InputType::Number,
         Some("integer") => InputType::Integer,
         Some("boolean") => InputType::Boolean,
-        Some("array") => match property.get("items").and_then(|i| i.get("type")) {
-            Some(Value::String(t)) if t == "string" => InputType::StringArray,
+        Some("array") => match property.get("items") {
+            // Any other key in `items`, such as `enum` or `format`, makes it complex.
+            Some(Value::Object(items))
+                if items.len() == 1 && items.get("type") == Some(&json!("string")) =>
+            {
+                InputType::StringArray
+            }
             _ => InputType::Complex,
         },
         _ => InputType::Complex,
@@ -276,6 +290,38 @@ mod tests {
         assert_eq!(out["properties"]["pet"], schema["properties"]["pet"]);
         assert_eq!(out["properties"]["status"]["enum"], json!(["a", "b"]));
         assert_eq!(out["properties"]["status"]["description"], "New text");
+    }
+
+    #[test]
+    fn rows_from_schema_marks_enum_array_as_complex() {
+        let schema = obj(json!({ "properties": {
+            "status": { "type": "array", "items": { "type": "string", "enum": ["a"] } },
+            "tags": { "type": "array", "items": { "type": "string" } },
+        } }));
+        let rows = rows_from_schema(&schema);
+        assert_eq!(rows[0].input_type, InputType::Complex);
+        assert_eq!(rows[1].input_type, InputType::StringArray);
+    }
+
+    #[test]
+    fn apply_rows_keeps_enum_array_items() {
+        let schema = obj(json!({ "properties": {
+            "status": { "type": "array", "items": { "type": "string", "enum": ["a"] } },
+        } }));
+        let mut rows = rows_from_schema(&schema);
+        rows[0].input_type = InputType::StringArray;
+        let out = apply_rows(&schema, &rows);
+        assert_eq!(out["properties"], schema["properties"]);
+    }
+
+    #[test]
+    fn apply_rows_keeps_required_names_without_rows() {
+        let schema = obj(json!({
+            "properties": { "a": { "type": "string" }, "b": { "type": "string" } },
+            "required": ["a", "b"],
+        }));
+        let rows = [row("b", InputType::String, false, "")];
+        assert_eq!(apply_rows(&schema, &rows)["required"], json!(["a"]));
     }
 
     #[test]

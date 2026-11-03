@@ -21,7 +21,7 @@ const RESULTS: Record<CallResult, { label: string; tone: string }> = {
   timed_out: { label: 'Timed out', tone: 'bad' },
 }
 
-/** Re-renders the component every `ms` milliseconds, so the chart window and the "ago" texts move. */
+/** Re-renders the component every `ms` milliseconds, so the chart window and the "ago" texts update. */
 function useNow(ms: number): number {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
@@ -290,7 +290,7 @@ function Tools({ server }: { server: string }) {
                 <span className="method">{t.method}</span> {t.path}
               </div>
             </div>
-            {/* The switches start to work with the Tools page (milestone 8). */}
+            {/* The switches are read-only until the Tools page exists (milestone 8). */}
             <label className="toggle" title="The Tools page will turn tools on and off">
               <input type="checkbox" checked={t.enabled} disabled readOnly aria-label={`${t.name} is ${t.enabled ? 'on' : 'off'}`} />
               <span />

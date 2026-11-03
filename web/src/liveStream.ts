@@ -26,7 +26,7 @@ export interface LiveState {
   buckets: Map<number, { calls: number; errors: number }>
   /** The newest call first. */
   calls: CallRecord[]
-  /** Ids of calls that came after the snapshot. The call log highlights them. */
+  /** Ids of calls that arrived after the snapshot. The call log highlights them. */
   fresh: Set<number>
 }
 
@@ -138,7 +138,7 @@ export function useLiveStream(server: string, paused: boolean): LiveState {
         throw new Error('the server closed the stream')
       } catch (error) {
         if (abort.signal.aborted) return
-        // A 4xx does not get better with a retry.
+        // A 4xx fails again on retry.
         if (error instanceof ApiError && error.status < 500) {
           dispatch({ type: 'status', status: 'failed', error: error.message })
           return

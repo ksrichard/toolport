@@ -1,4 +1,4 @@
-// The access JWT lives only in this module's memory. The refresh token is an HttpOnly cookie
+// This module keeps the access JWT in memory only. The refresh token is an HttpOnly cookie
 // that JavaScript cannot read. The browser sends it only to /auth/*.
 
 import type { ImportApi } from './types/ImportApi'

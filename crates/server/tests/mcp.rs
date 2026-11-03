@@ -122,7 +122,7 @@ async fn token(state: &AppState, server: &str) -> String {
         .value
 }
 
-/// The MCP sessions live in the router, so all requests of one test must use the same router.
+/// The router stores the MCP sessions, so all requests of one test must use the same router.
 async fn post_mcp(
     app: &Router,
     path: &str,

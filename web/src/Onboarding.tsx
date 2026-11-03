@@ -1,3 +1,5 @@
+// First-run wizard: pick a template or a spec, name the server, and copy the client command.
+
 import { useEffect, useState, type FormEvent } from 'react'
 import { ApiError, createServer, createToken, getTemplates, importApi } from './api'
 import { CopyButton } from './CopyButton'

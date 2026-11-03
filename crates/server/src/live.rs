@@ -34,7 +34,7 @@ use crate::{
 const ACTIVE_MS: i64 = 2 * 60 * 1000;
 const METRICS_INTERVAL: Duration = Duration::from_secs(5);
 const SNAPSHOT_CALLS: i64 = 50;
-/// A Live page that falls this many calls behind gets a new snapshot instead of the calls.
+/// A Live page that misses more than this many calls gets a new snapshot instead of the calls.
 const CALL_BUFFER: usize = 256;
 
 #[derive(Debug, Clone)]
@@ -69,7 +69,7 @@ pub struct ConnectedClient {
 }
 
 /// Shared by the MCP handler, which writes, and the SSE streams, which read.
-/// It lives in memory, so a server restart empties the client list.
+/// It is in memory only, so a server restart empties the client list.
 pub struct LiveHub {
     calls: broadcast::Sender<CallEvent>,
     clients: Mutex<HashMap<ClientKey, ClientSeen>>,
@@ -137,7 +137,7 @@ fn now_ms() -> i64 {
     i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
 }
 
-/// The first event of a stream. It is also sent again when the stream falls behind.
+/// The first event of a stream. It is also sent again when the stream misses calls.
 #[derive(Serialize, TS)]
 #[ts(export)]
 struct Snapshot {

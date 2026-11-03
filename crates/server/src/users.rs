@@ -1,3 +1,5 @@
+//! The user row: GitHub sign-in upsert, the current-user route, and the saved theme.
+
 use axum::{
     Json, Router,
     extract::State,

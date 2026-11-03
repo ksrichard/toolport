@@ -1,3 +1,5 @@
+// App shell: side menu, header, theme switcher, and a small router for the pages.
+
 import { useCallback, useEffect, useState } from 'react'
 import { getServers, setTheme, signOut, type Theme, type User } from './api'
 import { Brand } from './Brand'

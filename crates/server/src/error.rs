@@ -1,3 +1,5 @@
+//! Error types for startup, API handlers, and the GitHub sign-in callback.
+
 use std::net::SocketAddr;
 
 use axum::{

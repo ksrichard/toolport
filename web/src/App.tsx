@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ApiError, getMe, refreshSession, type User } from './api'
-import { Login } from './Login'
+import { Landing } from './Landing'
+import { Legal, type LegalPage } from './Legal'
 import { Shell } from './Shell'
 
 type Session =
@@ -8,6 +9,12 @@ type Session =
   | { kind: 'signedOut' }
   | { kind: 'failed'; message: string }
   | { kind: 'signedIn'; user: User }
+
+function legalPage(path: string): LegalPage | null {
+  if (path === '/terms') return 'terms'
+  if (path === '/privacy') return 'privacy'
+  return null
+}
 
 async function loadSession(): Promise<Session> {
   if (!(await refreshSession())) return { kind: 'signedOut' }
@@ -36,11 +43,15 @@ export default function App() {
     document.documentElement.dataset.theme = session.kind === 'signedIn' ? session.user.theme : 'neon'
   }, [session])
 
+  // Terms and privacy are public. They render for every session state.
+  const legal = legalPage(window.location.pathname)
+  if (legal) return <Legal page={legal} />
+
   switch (session.kind) {
     case 'loading':
       return null
     case 'signedOut':
-      return <Login />
+      return <Landing />
     case 'failed':
       return (
         <main className="login">

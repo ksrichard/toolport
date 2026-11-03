@@ -853,3 +853,57 @@ async fn list_changed_reaches_an_open_session(pool: PgPool) {
         }
     }
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn first_request_sends_a_client_event(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let access = state.auth.jwt.issue_access(1).unwrap();
+    let mut events = SseReader::new(open_live(&app, "pets", Some(&access)).await);
+    assert_eq!(events.next().await.0, "snapshot");
+
+    let client = Client::connect(&app, &state, "pets").await;
+    client.tool_names().await;
+    let (name, first) = events.next().await;
+    assert_eq!(name, "client");
+    assert_eq!(first["method"], "tools/list");
+    assert_eq!(first["tools_sent"], 4);
+    assert_eq!(first["client_name"], "test");
+    assert_eq!(first["token_name"], "test");
+
+    // The same client again sends no event, so the next event is the call.
+    client.tool_names().await;
+    client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(events.next().await.0, "call");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn first_request_as_a_tool_call_has_no_tool_count(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let access = state.auth.jwt.issue_access(1).unwrap();
+    let mut events = SseReader::new(open_live(&app, "pets", Some(&access)).await);
+    events.next().await;
+
+    let client = Client::connect(&app, &state, "pets").await;
+    client.call("getPet", json!({ "id": "1" })).await;
+    let (name, first) = events.next().await;
+    assert_eq!(name, "client");
+    assert_eq!(first["method"], "tools/call");
+    assert!(first.get("tools_sent").is_none());
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn client_event_goes_only_to_its_own_server(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    import(&pool, "other", UPSTREAM_SPEC, fake_upstream().await).await;
+    let access = state.auth.jwt.issue_access(1).unwrap();
+    let mut events = SseReader::new(open_live(&app, "other", Some(&access)).await);
+    events.next().await;
+
+    let client = Client::connect(&app, &state, "pets").await;
+    client.tool_names().await;
+    let other = Client::connect(&app, &state, "other").await;
+    other.tool_names().await;
+    let (name, first) = events.next().await;
+    assert_eq!(name, "client");
+    assert_eq!(first["tools_sent"], 4);
+}

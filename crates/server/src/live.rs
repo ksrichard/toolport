@@ -43,6 +43,27 @@ pub struct CallEvent {
     pub record: CallRecord,
 }
 
+/// What the broadcast channel carries. Each Live stream keeps the events of its own server.
+#[derive(Debug, Clone)]
+pub enum LiveEvent {
+    Call(CallEvent),
+    Client { server_id: i64, first: FirstRequest },
+}
+
+/// The first MCP request of a new client. The onboarding page shows it as "connected".
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
+pub struct FirstRequest {
+    pub client_name: Option<String>,
+    pub token_name: String,
+    /// The MCP method, for example `tools/list`.
+    pub method: String,
+    /// The number of tools in the answer. Only `tools/list` sets it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tools_sent: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ClientKey {
     server_id: i64,
@@ -71,7 +92,7 @@ pub struct ConnectedClient {
 /// Shared by the MCP handler, which writes, and the SSE streams, which read.
 /// It is in memory only, so a server restart empties the client list.
 pub struct LiveHub {
-    calls: broadcast::Sender<CallEvent>,
+    calls: broadcast::Sender<LiveEvent>,
     clients: Mutex<HashMap<ClientKey, ClientSeen>>,
 }
 
@@ -86,15 +107,24 @@ impl Default for LiveHub {
 
 impl LiveHub {
     pub fn publish(&self, event: CallEvent) {
+        self.send(LiveEvent::Call(event));
+    }
+
+    pub fn publish_client(&self, server_id: i64, first: FirstRequest) {
+        self.send(LiveEvent::Client { server_id, first });
+    }
+
+    fn send(&self, event: LiveEvent) {
         // An error means that no Live page is open. Nobody needs the event then.
         let _ = self.calls.send(event);
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<CallEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<LiveEvent> {
         self.calls.subscribe()
     }
 
-    pub fn seen(&self, caller: &McpCaller, client_name: Option<&str>) {
+    /// Returns true when this server, token, and client name were not active before.
+    pub fn seen(&self, caller: &McpCaller, client_name: Option<&str>) -> bool {
         let now = now_ms();
         let key = ClientKey {
             server_id: caller.server_id,
@@ -103,12 +133,17 @@ impl LiveHub {
         };
         let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
         clients.retain(|_, seen| now - seen.last_seen_ms < ACTIVE_MS);
-        let seen = clients.entry(key).or_insert_with(|| ClientSeen {
-            token_name: caller.token_name.clone(),
-            since_ms: now,
-            last_seen_ms: now,
+        let mut is_new = false;
+        let seen = clients.entry(key).or_insert_with(|| {
+            is_new = true;
+            ClientSeen {
+                token_name: caller.token_name.clone(),
+                since_ms: now,
+                last_seen_ms: now,
+            }
         });
         seen.last_seen_ms = now;
+        is_new
     }
 
     /// The connected clients of one server, the oldest first.
@@ -168,7 +203,7 @@ pub fn routes() -> Router<AppState> {
     Router::new().route("/servers/{name}/live", get(live))
 }
 
-/// The SSE stream of one server. The events are `snapshot`, `call`, and `metrics`.
+/// The SSE stream of one server. The events are `snapshot`, `call`, `client`, and `metrics`.
 /// The browser cannot send a Bearer header with `EventSource`, so the dashboard reads
 /// this stream with `fetch`.
 async fn live(
@@ -198,7 +233,7 @@ async fn live(
 async fn stream_events(
     state: AppState,
     server_id: i64,
-    mut calls: broadcast::Receiver<CallEvent>,
+    mut calls: broadcast::Receiver<LiveEvent>,
     tx: mpsc::Sender<Result<Event, Infallible>>,
 ) {
     let mut tick = tokio::time::interval(METRICS_INTERVAL);
@@ -209,8 +244,11 @@ async fn stream_events(
             () = tx.closed() => return,
             _ = tick.tick() => metrics_update(&state, server_id).await,
             received = calls.recv() => match received {
-                Ok(call) if call.server_id == server_id => {
+                Ok(LiveEvent::Call(call)) if call.server_id == server_id => {
                     Event::default().event("call").json_data(&call.record).map_err(LiveError::from)
+                }
+                Ok(LiveEvent::Client { server_id: id, first }) if id == server_id => {
+                    Event::default().event("client").json_data(&first).map_err(LiveError::from)
                 }
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(_)) => snapshot(&state, server_id).await,

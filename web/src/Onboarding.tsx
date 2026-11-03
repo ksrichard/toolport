@@ -1,7 +1,8 @@
-// First-run wizard: pick a template or a spec, name the server, and copy the client command.
+// First-run wizard: pick a template, a spec, or a hand-made tool, then copy the client command.
 
 import { useEffect, useState, type FormEvent } from 'react'
 import { ApiError, createServer, createToken, getTemplates, importApi } from './api'
+import { ToolForm } from './Builder'
 import { CopyButton } from './CopyButton'
 import { useLiveStream } from './liveStream'
 import type { ImportApi } from './types/ImportApi'
@@ -14,15 +15,15 @@ import type { Template } from './types/Template'
 const SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/
 const TOKEN_NAME = 'first-client'
 
-type Step = 'pick' | 'name' | 'connect'
+type Step = 'pick' | 'name' | 'build' | 'connect'
 const STEPS: { id: Step; label: string }[] = [
   { id: 'pick', label: 'Pick a template' },
   { id: 'name', label: 'Name the server' },
   { id: 'connect', label: 'Copy the command' },
 ]
 
-/** `own` is the card for the user's own OpenAPI spec. */
-type Choice = { kind: 'template'; template: Template } | { kind: 'own' }
+/** `own` is the card for the user's own OpenAPI spec. `hand` builds one tool in a form. */
+type Choice = { kind: 'template'; template: Template } | { kind: 'own' } | { kind: 'hand' }
 
 interface OnboardingProps {
   /** A server from an earlier, unfinished onboarding. The wizard continues with it. */
@@ -50,12 +51,24 @@ export function Onboarding({ existing, onCancel, onChanged, onDone }: Onboarding
   const pick = (next: Choice) => {
     setChoice(next)
     setError(null)
-    setStep('name')
+    setStep(next.kind === 'hand' ? 'build' : 'name')
+  }
+
+  const connect = async (created: ServerSummary) => {
+    setServer(created)
+    onChanged()
+    try {
+      setToken(await createToken(created.name, TOKEN_NAME))
+    } catch (e) {
+      // The connect step offers a button to create the token again.
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setStep('connect')
   }
 
   return (
     <div className="onboarding">
-      <div className="eyebrow">// {step === 'pick' ? 'Templates' : step === 'name' ? 'Your server' : 'Connect'}</div>
+      <div className="eyebrow">// {step === 'pick' ? 'Templates' : step === 'connect' ? 'Connect' : 'Your server'}</div>
       {step === 'pick' && (
         <>
           <h1 className="hero">Start from a template, not a blank form</h1>
@@ -78,6 +91,15 @@ export function Onboarding({ existing, onCancel, onChanged, onDone }: Onboarding
                 <span className={`badge ${t.keyless ? 'ok' : 'key'}`}>{t.badge}</span>
               </button>
             ))}
+            <button type="button" className="card" onClick={() => pick({ kind: 'hand' })}>
+              <svg className="card-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 20h4L19 9l-4-4L4 16v4ZM13 7l4 4" />
+              </svg>
+              <span className="card-title">Build a tool by hand</span>
+              <span className="card-host">no spec needed</span>
+              <span className="card-text">Fill in one HTTP call. ToolPort turns it into an MCP tool.</span>
+              <span className="badge key">your own API</span>
+            </button>
           </div>
           <button type="button" className="link" onClick={() => pick({ kind: 'own' })}>
             Or import your own OpenAPI 3.0 spec →
@@ -85,7 +107,27 @@ export function Onboarding({ existing, onCancel, onChanged, onDone }: Onboarding
         </>
       )}
 
-      {step === 'name' && choice && (
+      {step === 'build' && (
+        <>
+          <h1 className="hero">Build your first tool</h1>
+          {error && <p className="alert" role="alert">{error}</p>}
+          <ToolForm
+            server={null}
+            initial={null}
+            onboarding
+            onSaved={(saved) => {
+              if (saved.kind === 'server') void connect(saved.server)
+            }}
+          />
+          <div className="actions">
+            <button type="button" className="btn" onClick={() => setStep('pick')}>
+              Back
+            </button>
+          </div>
+        </>
+      )}
+
+      {step === 'name' && choice && choice.kind !== 'hand' && (
         <NameStep
           choice={choice}
           existing={server}
@@ -137,7 +179,7 @@ export function Onboarding({ existing, onCancel, onChanged, onDone }: Onboarding
 }
 
 interface NameStepProps {
-  choice: Choice
+  choice: Exclude<Choice, { kind: 'hand' }>
   existing: ServerSummary | null
   onBack: () => void
   onCreated: (server: ServerSummary) => void
@@ -313,6 +355,7 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const tools = imported.flatMap((api) => api.tools)
+  const toolCount = tools.length > 0 ? tools.length : server.tools
   const skipped = imported.reduce((n, api) => n + api.skipped.length, 0)
 
   const newToken = async () => {
@@ -330,10 +373,15 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
   return (
     <section className="panel wizard">
       <h1 className="hero">Connect your AI client</h1>
-      {tools.length > 0 && (
+      {toolCount > 0 && (
         <p className="lead">
-          <strong>{server.name}</strong> has {tools.length === 1 ? '1 tool' : `${tools.length} tools`}:{' '}
-          <span className="mono">{tools.join(', ')}</span>.
+          <strong>{server.name}</strong> has {toolCount === 1 ? '1 tool' : `${toolCount} tools`}
+          {tools.length > 0 && (
+            <>
+              : <span className="mono">{tools.join(', ')}</span>
+            </>
+          )}
+          .
           {skipped > 0 && ` ToolPort skipped ${skipped} operations that it cannot call yet.`}
         </p>
       )}
@@ -347,16 +395,15 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
               </button>
             ))}
           </div>
-          <p className="muted">{WHERE[client]}</p>
-          <div className="snippet">
-            <pre>{snippet(client, server, token.token)}</pre>
-            <CopyButton text={snippet(client, server, token.token)} label="Copy" className="btn primary" />
-          </div>
+          <ConnectionBadge
+            server={server.name}
+            command={snippet(client, server, token.token)}
+            hint={client === 'Claude Code' ? 'Paste this into your terminal:' : WHERE[client]}
+          />
           <p className="note">
             The command contains a token. ToolPort shows it only now and does not store it. The token works for{' '}
             {token.expires_in_days} days.
           </p>
-          <FirstConnection server={server.name} />
         </>
       ) : (
         <>
@@ -378,20 +425,42 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
   )
 }
 
-/** Shows when the new client connects and makes its first call. */
-function FirstConnection({ server }: { server: string }) {
+/** One card with two states. It flips to CONNECTED on the first MCP request of a new client. */
+function ConnectionBadge({ server, command, hint }: { server: string; command: string; hint: string }) {
   const live = useLiveStream(server, false)
-  const client = live.clients[0]
-  const call = live.calls[0]
+  const first = live.firstRequest
+  // After a page reload, the snapshot still lists the client, but the first request event is gone.
+  const client = first?.client_name ?? live.clients[0]?.client_name
+  const connected = first !== null || live.clients.length > 0
+  const detail = first
+    ? first.tools_sent === undefined
+      ? first.method
+      : `${first.method} · ${first.tools_sent} tools sent`
+    : null
+
   return (
-    <ul className="checks" aria-live="polite">
-      <li className={client ? 'done' : 'waiting'}>
-        {client ? `${client.client_name ?? 'A client'} is connected.` : 'Waiting for your client to connect…'}
-      </li>
-      <li className={call ? 'done' : 'waiting'}>
-        {call ? `First call: ${call.tool} (${call.result === 'ok' ? 'OK' : call.result.replace('_', ' ')}).` : 'Waiting for the first tool call. Ask your client about the API.'}
-      </li>
-    </ul>
+    <div className={`badge-card${connected ? ' connected' : ''}`} aria-live="polite">
+      <div className="badge-state">
+        <span className="badge-dot" aria-hidden="true" />
+        {connected ? 'CONNECTED' : 'WAITING'}
+      </div>
+      {connected ? (
+        <>
+          <h2>Connected · {client ?? 'A client'}</h2>
+          <p className="muted">First request received. Now ask Claude something.</p>
+          {detail && <div className="badge-detail mono">{detail}</div>}
+        </>
+      ) : (
+        <>
+          <h2>Waiting for your agent…</h2>
+          <p className="muted">{hint}</p>
+          <div className="snippet">
+            <pre>{command}</pre>
+            <CopyButton text={command} label="Copy" className="btn primary" />
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

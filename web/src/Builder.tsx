@@ -11,6 +11,7 @@ import {
   getApis,
   getTool,
   resetTool,
+  testDraftTool,
   testTool,
   updateApi,
   updateTool,
@@ -346,7 +347,6 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
 
   const test = () =>
     run(async () => {
-      if (server === null) return
       const args: Record<string, unknown> = {}
       for (const row of filledRows) {
         const text = (samples[row.name] ?? '').trim()
@@ -358,7 +358,8 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       let testApi: TestApi
       if (apiId === null) testApi = { kind: 'draft', base_url: baseUrl.trim(), auth: authInput(auth) }
       else testApi = { kind: 'saved', id: apiId, auth: apiIsSpec || !apiDirty ? undefined : authInput(auth) }
-      setResult(await testTool(server, { draft: buildDraft(), api: testApi, args }))
+      const request = { draft: buildDraft(), api: testApi, args }
+      setResult(server === null ? await testDraftTool(request) : await testTool(server, request))
     })
 
   // ---- row helpers ----
@@ -379,7 +380,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
         <section className="panel form">
           <h2>
             {initial ? 'Edit tool' : 'New tool'}
-            <button className="btn primary" type="button" onClick={test} disabled={busy || server === null} title={server === null ? 'Save the server first to test' : undefined}>
+            <button className="btn primary" type="button" onClick={test} disabled={busy}>
               ▷ Test
             </button>
           </h2>
@@ -620,7 +621,6 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
             </label>
           )}
         </div>
-        {server === null && <p className="note">Test is available after the server exists.</p>}
       </section>
 
       {result && (

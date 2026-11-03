@@ -744,13 +744,18 @@ const ECHO_SPEC: &str = r#"{
   "paths": { "/whoami": { "get": { "operationId": "whoami", "responses": {} } } }
 }"#;
 
-/// A fake upstream that returns the two auth headers it got.
+/// A fake upstream that tells whether the two auth headers have the expected values.
+/// It must not echo them, because ToolPort masks the secret in responses.
 async fn echo_upstream() -> Url {
     let app = Router::new().route(
         "/v1/whoami",
         get(|headers: HeaderMap| async move {
             let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-            Json(json!({ "authorization": get("authorization"), "x_api_key": get("x-api-key") }))
+            Json(json!({
+                "bearer_ok": get("authorization") == Some("Bearer t0ken"),
+                "key_ok": get("x-api-key") == Some("k3y"),
+                "has_authorization": get("authorization").is_some(),
+            }))
         }),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -787,7 +792,7 @@ async fn bearer_auth_reaches_upstream(pool: PgPool) {
     let client = Client::connect(&app, &state, "echo").await;
     let result = client.call("whoami", json!({})).await;
     let answer: Value = serde_json::from_str(text(&result)).unwrap();
-    assert_eq!(answer["authorization"], "Bearer t0ken");
+    assert_eq!(answer["bearer_ok"], true);
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -797,8 +802,8 @@ async fn api_key_auth_reaches_upstream(pool: PgPool) {
     let client = Client::connect(&app, &state, "echo").await;
     let result = client.call("whoami", json!({})).await;
     let answer: Value = serde_json::from_str(text(&result)).unwrap();
-    assert_eq!(answer["x_api_key"], "k3y");
-    assert_eq!(answer["authorization"], Value::Null);
+    assert_eq!(answer["key_ok"], true);
+    assert_eq!(answer["has_authorization"], false);
 }
 
 #[sqlx::test(migrations = "../../migrations")]

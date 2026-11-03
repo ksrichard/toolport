@@ -133,6 +133,12 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
     )
   } else if (!servers) {
     content = null
+  } else if (route && !servers.some((s) => s.name === route.server)) {
+    content = (
+      <p className="alert" role="alert">
+        The server {route.server} does not exist.
+      </p>
+    )
   } else if (!selected || path === '/new') {
     content = (
       <Onboarding

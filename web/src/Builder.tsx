@@ -84,6 +84,16 @@ function specSchema(preview: unknown, rows: InputRow[]): Schema {
   return schema
 }
 
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys)
+  if (typeof value !== 'object' || value === null) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => [k, sortKeys(v)]),
+  )
+}
+
 // ---- colored JSON ----
 
 type Token = [cls: string, text: string]
@@ -240,7 +250,8 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
   const placeholders = pathPlaceholders(path).filter((p) => !filledRows.some((r) => r.name === p))
 
   const schema = isSpec && initial ? specSchema(initial.preview, filledRows) : schemaFromRows(filledRows, body)
-  const preview = toolJson(name.trim(), about, schema)
+  // The server sends the keys of inputSchema in sorted order, so the preview sorts them too.
+  const preview = toolJson(name.trim(), about, sortKeys(schema) as Schema)
 
   const buildDraft = (): ToolDraft => {
     const draft: ToolDraft = {
@@ -256,12 +267,18 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
     return draft
   }
 
+  /** The host of the base URL. A number is added when an API already has that name. */
   const apiNameFor = () => {
+    let host = baseUrl.trim()
     try {
-      return new URL(baseUrl.trim()).hostname
+      host = new URL(host).hostname
     } catch {
-      return baseUrl.trim()
+      // Keep the text. The server rejects a bad URL.
     }
+    const taken = new Set((apis ?? []).map((a) => a.name))
+    let candidate = host
+    for (let n = 2; taken.has(candidate); n++) candidate = `${host}-${n}`
+    return candidate
   }
   const newApi = () => ({ name: apiNameFor(), base_url: baseUrl.trim(), auth: authInput(auth) })
 

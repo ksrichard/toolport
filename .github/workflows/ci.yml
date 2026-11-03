@@ -49,6 +49,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - run: npm run check:preview
 
   docker:
     runs-on: ubuntu-latest

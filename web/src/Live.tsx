@@ -43,9 +43,11 @@ function ago(ms: number): string {
 interface LiveProps {
   server: ServerSummary
   onConnectClient: () => void
+  /** Opens the builder. Null opens it for a new tool. */
+  onOpenTool: (tool: string | null) => void
 }
 
-export function Live({ server, onConnectClient }: LiveProps) {
+export function Live({ server, onConnectClient, onOpenTool }: LiveProps) {
   const [paused, setPaused] = useState(false)
   const live = useLiveStream(server.name, paused)
   const now = useNow(BUCKET_MS)
@@ -116,7 +118,7 @@ export function Live({ server, onConnectClient }: LiveProps) {
         </div>
         <div className="col">
           <Clients live={live} now={now} />
-          <Tools server={server.name} />
+          <Tools server={server.name} onOpenTool={onOpenTool} />
         </div>
       </div>
     </>
@@ -260,7 +262,7 @@ function Clients({ live, now }: { live: LiveState; now: number }) {
   )
 }
 
-function Tools({ server }: { server: string }) {
+function Tools({ server, onOpenTool }: { server: string; onOpenTool: (tool: string | null) => void }) {
   const [tools, setTools] = useState<ToolSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -278,14 +280,29 @@ function Tools({ server }: { server: string }) {
   return (
     <section className="panel">
       <h2>
-        Tools <small>turn off to hide from agents</small>
+        Tools{' '}
+        <button className="btn" type="button" onClick={() => onOpenTool(null)}>
+          New tool
+        </button>
       </h2>
       {error && <p className="alert">{error}</p>}
       <ul className="list">
         {tools?.map((t) => (
           <li key={t.name} className="tool">
             <div className="t">
-              <div>{t.name}</div>
+              <div>
+                <a
+                  href={`/servers/${encodeURIComponent(server)}/tools/${encodeURIComponent(t.name)}`}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    onOpenTool(t.name)
+                  }}
+                >
+                  {t.name}
+                </a>
+                {t.source === 'manual' && <span className="method">manual</span>}
+                {t.edited && <span className="method">edited</span>}
+              </div>
               <div>
                 <span className="method">{t.method}</span> {t.path}
               </div>

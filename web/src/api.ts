@@ -1,13 +1,20 @@
 // This module keeps the access JWT in memory only. The refresh token is an HttpOnly cookie
 // that JavaScript cannot read. The browser sends it only to /auth/*.
 
+import type { ApiView } from './types/ApiView'
+import type { CreateServerWithTool } from './types/CreateServerWithTool'
 import type { ImportApi } from './types/ImportApi'
 import type { ImportedApi } from './types/ImportedApi'
 import type { NewToken } from './types/NewToken'
+import type { SaveApi } from './types/SaveApi'
+import type { SaveTool } from './types/SaveTool'
 import type { ServerSummary } from './types/ServerSummary'
 import type { Template } from './types/Template'
 import type { Theme } from './types/Theme'
+import type { TestRequest } from './types/TestRequest'
+import type { TestResult } from './types/TestResult'
 import type { ToolSummary } from './types/ToolSummary'
+import type { ToolView } from './types/ToolView'
 import type { User } from './types/User'
 
 export type { Theme, User }
@@ -110,3 +117,32 @@ export const importApi = (name: string, source: ImportApi) =>
 
 export const createToken = (name: string, tokenName: string) =>
   api<NewToken>(`${server(name)}/tokens`, { method: 'POST', body: JSON.stringify({ name: tokenName }) })
+
+const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
+const toolPath = (name: string, tool: string) => `${server(name)}/tools/${encodeURIComponent(tool)}`
+
+export const getApis = (name: string) => api<ApiView[]>(`${server(name)}/apis`)
+
+export const createManualApi = (name: string, body: SaveApi) =>
+  api<ApiView>(`${server(name)}/apis/manual`, json('POST', body))
+
+export const updateApi = (name: string, id: number, body: SaveApi) =>
+  api<ApiView>(`${server(name)}/apis/${id}`, json('PUT', body))
+
+export const getTool = (name: string, tool: string) => api<ToolView>(toolPath(name, tool))
+
+export const createTool = (name: string, body: SaveTool) => api<ToolView>(`${server(name)}/tools`, json('POST', body))
+
+export const updateTool = (name: string, tool: string, body: SaveTool) =>
+  api<ToolView>(toolPath(name, tool), json('PUT', body))
+
+export const resetTool = (name: string, tool: string) =>
+  api<ToolView>(`${toolPath(name, tool)}/reset`, { method: 'POST' })
+
+export const deleteTool = (name: string, tool: string) => api<void>(toolPath(name, tool), { method: 'DELETE' })
+
+export const testTool = (name: string, body: TestRequest) =>
+  api<TestResult>(`${server(name)}/tool-test`, json('POST', body))
+
+export const createServerWithTool = (body: CreateServerWithTool) =>
+  api<ServerSummary>('/api/servers/with-tool', json('POST', body))

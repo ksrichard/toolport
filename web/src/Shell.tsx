@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getServers, setTheme, signOut, type Theme, type User } from './api'
 import { Brand } from './Brand'
+import { Builder } from './Builder'
 import { Live } from './Live'
 import { Onboarding } from './Onboarding'
 import type { ServerSummary } from './types/ServerSummary'
@@ -43,6 +44,14 @@ function saveSelected(name: string) {
   } catch {
     // Private windows can block storage.
   }
+}
+
+/** Routes of the tool builder: /servers/<name>/tools/new and /servers/<name>/tools/<tool>. */
+function builderRoute(path: string): { server: string; tool: string | null } | null {
+  const match = /^\/servers\/([^/]+)\/tools\/([^/]+)$/.exec(path)
+  if (!match) return null
+  const [server, tool] = [decodeURIComponent(match[1]), decodeURIComponent(match[2])]
+  return { server, tool: tool === 'new' ? null : tool }
 }
 
 /** Small client-side router. Caddy and Vite serve index.html for every page path. */
@@ -106,7 +115,9 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
     onSignedOut()
   }
 
-  const selected = servers?.find((s) => s.name === selectedName) ?? servers?.[0] ?? null
+  const route = builderRoute(path)
+  const selected =
+    servers?.find((s) => s.name === (route?.server ?? selectedName)) ?? servers?.[0] ?? null
   const finishOnboarding = (name: string) => {
     select(name)
     reloadServers()
@@ -144,9 +155,23 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
     )
   } else {
     const page = PAGES.find((p) => p.path === path) ?? PAGES[0]
-    content =
-      page.path === '/' ? (
-        <Live key={selected.name} server={selected} onConnectClient={() => navigate('/connect')} />
+    content = route ? (
+      <Builder
+        key={path}
+        server={selected.name}
+        tool={route.tool}
+        navigate={navigate}
+        onChanged={reloadServers}
+      />
+    ) : page.path === '/' ? (
+        <Live
+          key={selected.name}
+          server={selected}
+          onConnectClient={() => navigate('/connect')}
+          onOpenTool={(tool) =>
+            navigate(`/servers/${encodeURIComponent(selected.name)}/tools/${encodeURIComponent(tool ?? 'new')}`)
+          }
+        />
       ) : (
         <>
           <div className="head">

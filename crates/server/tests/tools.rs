@@ -865,3 +865,234 @@ async fn save_twice_gives_a_valid_tool(pool: PgPool) {
     assert_eq!(view["draft"]["query"], "latitude={lat}&longitude={lon}");
     assert_eq!(view["preview"]["inputSchema"], listed["inputSchema"]);
 }
+
+const PET_SUMMARY: &str = "Find pet by ID.";
+
+fn petstore_with(from: &str, to: &str) -> String {
+    assert!(PETSTORE.contains(from), "{from}");
+    PETSTORE.replace(from, to)
+}
+
+async fn reimport(app: &App, spec: &str) -> server::import::ImportReport {
+    import_spec(
+        &app.state.pool,
+        ImportRequest {
+            owner: Owner::Login("octocat"),
+            server: "pets",
+            api_name: None,
+            spec_text: spec,
+            base_url: Some("https://petstore.example/api/v3".parse().unwrap()),
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// Edits the tool and gives it a new name. Returns the saved view.
+async fn edit_and_rename(app: &App, tool: &str, new_name: &str) -> Value {
+    let (_, view) = app
+        .json(
+            "GET",
+            &format!("/api/servers/pets/tools/{tool}"),
+            json!(null),
+        )
+        .await;
+    let mut body = save_body(&view);
+    body["draft"]["name"] = json!(new_name);
+    body["draft"]["description"] = json!("My own text");
+    let (status, saved) = app
+        .json("PUT", &format!("/api/servers/pets/tools/{tool}"), body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    saved
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_keeps_edited_tool_and_its_new_name(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    edit_and_rename(&app, "getPetById", "pet").await;
+
+    let report = reimport(&app, PETSTORE).await;
+    assert!(report.replaced);
+    assert_eq!(report.kept, vec!["pet".to_owned()]);
+    assert!(report.removed.is_empty());
+
+    let (status, view) = app
+        .json("GET", "/api/servers/pets/tools/pet", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["draft"]["description"], "My own text");
+    assert_eq!(view["edited"], true);
+    assert_eq!(view["spec_changed"], false);
+    let (status, _) = app
+        .json("GET", "/api/servers/pets/tools/getPetById", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_marks_spec_change(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    edit_and_rename(&app, "getPetById", "pet").await;
+    reimport(&app, &petstore_with(PET_SUMMARY, "Find a pet by its ID.")).await;
+
+    let (_, view) = app
+        .json("GET", "/api/servers/pets/tools/pet", json!(null))
+        .await;
+    assert_eq!(view["spec_changed"], true);
+    let (_, list) = app
+        .json("GET", "/api/servers/pets/tools", json!(null))
+        .await;
+    let row = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "pet")
+        .unwrap();
+    assert_eq!(row["spec_changed"], true);
+
+    // Reset takes the new spec version and clears the flag.
+    let (_, reset) = app
+        .json("POST", "/api/servers/pets/tools/pet/reset", json!(null))
+        .await;
+    assert_eq!(reset["spec_changed"], false);
+    assert_eq!(reset["edited"], false);
+    assert!(
+        reset["draft"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Find a pet by its ID.")
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_of_an_unedited_tool_takes_the_new_spec(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    reimport(&app, &petstore_with(PET_SUMMARY, "Find a pet by its ID.")).await;
+    let (_, view) = app
+        .json("GET", "/api/servers/pets/tools/getPetById", json!(null))
+        .await;
+    assert!(
+        view["draft"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Find a pet by its ID.")
+    );
+    assert_eq!(view["edited"], false);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_removes_gone_operation_even_if_edited(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    edit_and_rename(&app, "getInventory", "stock").await;
+    let spec = petstore_with("\"/store/inventory\"", "\"/store/stock\"");
+    let report = reimport(&app, &spec).await;
+    assert_eq!(report.removed, vec!["stock".to_owned()]);
+    assert!(report.kept.is_empty());
+    assert!(report.tools.contains(&"getInventory".to_owned()));
+    let (status, _) = app
+        .json("GET", "/api/servers/pets/tools/stock", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_keeps_enabled_flag(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    sqlx::query("UPDATE tools SET enabled = false WHERE name = 'getPetById'")
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+    reimport(&app, &petstore_with(PET_SUMMARY, "Find a pet by its ID.")).await;
+    let enabled: bool = sqlx::query_scalar("SELECT enabled FROM tools WHERE name = 'getPetById'")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    assert!(!enabled);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_keeps_manual_tools_of_the_api(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let api_id: i64 = sqlx::query_scalar("SELECT id FROM apis")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    let (status, view) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": forecast_draft() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{view}");
+    let name = view["draft"]["name"].as_str().unwrap().to_owned();
+
+    reimport(&app, PETSTORE).await;
+    let api_after: i64 = sqlx::query_scalar("SELECT id FROM apis")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(api_after, api_id);
+    let manual_api: i64 =
+        sqlx::query_scalar("SELECT api_id FROM tools WHERE source = 'manual' AND name = $1")
+            .bind(&name)
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(manual_api, api_id);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_of_old_rows_without_a_hash_sets_it_and_raises_no_alarm(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    edit_and_rename(&app, "getPetById", "pet").await;
+    sqlx::query("UPDATE tools SET spec_hash = NULL, edited_hash = NULL")
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+    reimport(&app, &petstore_with(PET_SUMMARY, "Find a pet by its ID.")).await;
+    let missing: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM tools WHERE source = 'spec' AND spec_hash IS NULL",
+    )
+    .fetch_one(&app.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(missing, 0);
+    let (_, view) = app
+        .json("GET", "/api/servers/pets/tools/pet", json!(null))
+        .await;
+    assert_eq!(view["spec_changed"], false);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reimport_ignores_the_spec_name_of_an_edited_tool(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let api_id: i64 = sqlx::query_scalar("SELECT id FROM apis")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    // The user renames the spec tool away, then makes a manual tool with the old name.
+    edit_and_rename(&app, "getPetById", "pet").await;
+    let mut draft = forecast_draft();
+    draft["name"] = json!("getPetById");
+    let (status, view) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": draft }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{view}");
+    // The edited tool keeps its own name, so the spec name causes no clash.
+    let report = reimport(&app, PETSTORE).await;
+    assert_eq!(report.kept, vec!["pet".to_owned()]);
+}

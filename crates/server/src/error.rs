@@ -152,7 +152,9 @@ impl ApiError {
                 ImportError::ToolNameTaken(_) | ImportError::ServerOwnedByOther(_) => {
                     StatusCode::CONFLICT
                 }
-                ImportError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ImportError::Database(_) | ImportError::Hash(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
                 _ => StatusCode::UNPROCESSABLE_ENTITY,
             },
             Self::Token(error) => match error {
@@ -210,7 +212,7 @@ impl ApiError {
                 ImportError::UnknownOwner(_) => "unknown_owner",
                 ImportError::ServerOwnedByOther(_) => "server_name_taken",
                 ImportError::ToolNameTaken(_) => "tool_name_taken",
-                ImportError::Database(_) => "internal_error",
+                ImportError::Database(_) | ImportError::Hash(_) => "internal_error",
             },
             Self::Token(error) => match error {
                 TokenError::EmptyName => "invalid_token_name",

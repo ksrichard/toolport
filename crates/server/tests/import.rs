@@ -49,9 +49,13 @@ async fn petstore_import_creates_the_server_and_the_tools(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
-async fn import_with_the_same_api_name_replaces_the_tools(pool: PgPool) {
+async fn import_with_the_same_api_name_updates_the_api_in_place(pool: PgPool) {
     common::create_user(&pool, 1, "octocat").await;
     import_spec(&pool, petstore("petstore", None))
+        .await
+        .unwrap();
+    let api_id: i64 = sqlx::query_scalar("SELECT id FROM apis")
+        .fetch_one(&pool)
         .await
         .unwrap();
     let report = import_spec(&pool, petstore("petstore", None))
@@ -59,6 +63,17 @@ async fn import_with_the_same_api_name_replaces_the_tools(pool: PgPool) {
         .unwrap();
     assert!(!report.server_created);
     assert!(report.replaced);
+    assert!(report.kept.is_empty() && report.removed.is_empty());
+    let after: i64 = sqlx::query_scalar("SELECT id FROM apis")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after, api_id);
+    let unhashed: i64 = sqlx::query_scalar("SELECT count(*) FROM tools WHERE spec_hash IS NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(unhashed, 0);
     assert_eq!(tool_count(&pool, "petstore").await, 19);
 }
 

@@ -1,8 +1,9 @@
 //! Loads an OpenAPI spec into a server. The `import-spec` binary uses it until the APIs page exists.
 
 use reqwest::Url;
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, types::Json};
-use toolport_core::{SkippedOperation, SpecError, convert, parse_spec, server_name};
+use toolport_core::{SkippedOperation, SpecError, ToolDef, convert, parse_spec, server_name};
 
 /// The CLI knows the owner by GitHub login. The dashboard knows the signed-in user id.
 #[derive(Debug, Clone, Copy)]
@@ -27,9 +28,14 @@ pub struct ImportReport {
     pub server_created: bool,
     pub api_name: String,
     pub base_url: Url,
-    /// True when an API with the same name existed. Its old tools are gone.
+    /// True when an API with the same name existed. It is updated in place.
     pub replaced: bool,
+    /// The spec tools of the API after the import, under their current names.
     pub tools: Vec<String>,
+    /// Edited tools that stayed. The import changed only their stored spec version.
+    pub kept: Vec<String>,
+    /// Spec tools deleted because their operation is not in the spec any more.
+    pub removed: Vec<String>,
     pub skipped: Vec<SkippedOperation>,
 }
 
@@ -53,12 +59,25 @@ pub enum ImportError {
     ServerOwnedByOther(String),
     #[error("other APIs of this server already have tools with these names: {}", .0.join(", "))]
     ToolNameTaken(Vec<String>),
+    #[error("the tool could not be hashed")]
+    Hash(#[from] serde_json::Error),
     #[error("the database query failed")]
     Database(#[from] sqlx::Error),
 }
 
+/// SHA-256 hex of the converted tool. A changed hash means the spec changed this tool.
+pub fn spec_hash(tool: &ToolDef) -> Result<String, serde_json::Error> {
+    use std::fmt::Write;
+    let digest = Sha256::digest(serde_json::to_vec(tool)?);
+    Ok(digest.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    }))
+}
+
 /// Creates the server if needed and adds the API with one tool per operation.
-/// An API with the same name on the same server is replaced, so the same command can run again.
+/// An API with the same name on the same server is updated in place, so the same command can
+/// run again. A spec tool is matched by its operation. Edited tools keep the user's fields.
 pub async fn import_spec(
     pool: &PgPool,
     request: ImportRequest<'_>,
@@ -122,52 +141,131 @@ pub async fn import_spec(
         return Err(ImportError::ServerOwnedByOther(request.server.to_owned()));
     }
 
-    let replaced = sqlx::query("DELETE FROM apis WHERE server_id = $1 AND name = $2")
-        .bind(server_id)
-        .bind(&api_name)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-        > 0;
+    let existing: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM apis WHERE server_id = $1 AND name = $2 FOR UPDATE")
+            .bind(server_id)
+            .bind(&api_name)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let replaced = existing.is_some();
+    let api_id: i64 = match existing {
+        Some(id) => {
+            sqlx::query("UPDATE apis SET base_url = $1, spec = $2 WHERE id = $3")
+                .bind(base_url.as_str())
+                .bind(request.spec_text)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            id
+        }
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO apis (server_id, name, base_url, spec)
+                 VALUES ($1, $2, $3, $4) RETURNING id",
+            )
+            .bind(server_id)
+            .bind(&api_name)
+            .bind(base_url.as_str())
+            .bind(request.spec_text)
+            .fetch_one(&mut *tx)
+            .await?
+        }
+    };
 
-    let names: Vec<&str> = conversion.tools.iter().map(|t| t.name.as_str()).collect();
-    let taken: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM tools WHERE server_id = $1 AND name = ANY($2) ORDER BY name",
+    let operations: Vec<String> = conversion.tools.iter().map(operation).collect();
+
+    // Delete first, so a new tool can take the name of a deleted one.
+    let removed: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM tools WHERE api_id = $1 AND source = 'spec' AND NOT (operation = ANY($2))
+         RETURNING name",
     )
-    .bind(server_id)
-    .bind(&names)
+    .bind(api_id)
+    .bind(&operations)
     .fetch_all(&mut *tx)
     .await?;
-    if !taken.is_empty() {
-        return Err(ImportError::ToolNameTaken(taken));
-    }
 
-    let api_id: i64 = sqlx::query_scalar(
-        "INSERT INTO apis (server_id, name, base_url, spec) VALUES ($1, $2, $3, $4) RETURNING id",
+    let old_rows: Vec<(i64, String, bool, String)> = sqlx::query_as(
+        "SELECT id, operation, edited, name FROM tools
+         WHERE api_id = $1 AND source = 'spec'",
     )
-    .bind(server_id)
-    .bind(&api_name)
-    .bind(base_url.as_str())
-    .bind(request.spec_text)
-    .fetch_one(&mut *tx)
+    .bind(api_id)
+    .fetch_all(&mut *tx)
     .await?;
 
-    for tool in &conversion.tools {
-        sqlx::query(
-            "INSERT INTO tools (api_id, server_id, name, description, input_schema, request,
-                                source, spec_tool, operation)
-             VALUES ($1, $2, $3, $4, $5, $6, 'spec', $7, $8)",
-        )
-        .bind(api_id)
-        .bind(server_id)
-        .bind(&tool.name)
-        .bind(&tool.description)
-        .bind(Json(&tool.input_schema))
-        .bind(Json(&tool.request))
-        .bind(Json(tool))
-        .bind(format!("{} {}", tool.request.method, tool.request.path))
-        .execute(&mut *tx)
-        .await?;
+    let mut tools = Vec::with_capacity(conversion.tools.len());
+    let mut kept = Vec::new();
+    let mut taken = Vec::new();
+    for (tool, operation) in conversion.tools.iter().zip(&operations) {
+        let hash = spec_hash(tool)?;
+        let old = old_rows.iter().find(|row| &row.1 == operation);
+        // An edited tool keeps its own name, so the spec name cannot clash.
+        if !old.is_some_and(|row| row.2) {
+            let clash: Option<String> = sqlx::query_scalar(
+                "SELECT name FROM tools WHERE server_id = $1 AND name = $2 AND id <> $3",
+            )
+            .bind(server_id)
+            .bind(&tool.name)
+            .bind(old.map_or(0, |row| row.0))
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(name) = clash {
+                taken.push(name);
+                continue;
+            }
+        }
+        match old {
+            None => {
+                sqlx::query(
+                    "INSERT INTO tools (api_id, server_id, name, description, input_schema,
+                                        request, source, spec_tool, spec_hash, operation)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'spec', $7, $8, $9)",
+                )
+                .bind(api_id)
+                .bind(server_id)
+                .bind(&tool.name)
+                .bind(&tool.description)
+                .bind(Json(&tool.input_schema))
+                .bind(Json(&tool.request))
+                .bind(Json(tool))
+                .bind(&hash)
+                .bind(operation)
+                .execute(&mut *tx)
+                .await?;
+                tools.push(tool.name.clone());
+            }
+            Some((id, _, true, name)) => {
+                sqlx::query("UPDATE tools SET spec_tool = $1, spec_hash = $2 WHERE id = $3")
+                    .bind(Json(tool))
+                    .bind(&hash)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                kept.push(name.clone());
+                tools.push(name.clone());
+            }
+            Some((id, _, false, _)) => {
+                sqlx::query(
+                    "UPDATE tools SET name = $1, description = $2, input_schema = $3,
+                            request = $4, spec_tool = $5, spec_hash = $6
+                     WHERE id = $7",
+                )
+                .bind(&tool.name)
+                .bind(&tool.description)
+                .bind(Json(&tool.input_schema))
+                .bind(Json(&tool.request))
+                .bind(Json(tool))
+                .bind(&hash)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+                tools.push(tool.name.clone());
+            }
+        }
+    }
+    if !taken.is_empty() {
+        taken.sort();
+        taken.dedup();
+        return Err(ImportError::ToolNameTaken(taken));
     }
 
     tx.commit().await?;
@@ -177,7 +275,13 @@ pub async fn import_spec(
         api_name,
         base_url,
         replaced,
-        tools: names.into_iter().map(str::to_owned).collect(),
+        tools,
+        kept,
+        removed,
         skipped: conversion.skipped,
     })
+}
+
+fn operation(tool: &ToolDef) -> String {
+    format!("{} {}", tool.request.method, tool.request.path)
 }

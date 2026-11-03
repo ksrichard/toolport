@@ -612,6 +612,7 @@ type ToolRow = (
     String,
     bool,
     Option<Db<Value>>,
+    bool,
 );
 
 fn tool_name_taken(name: &str) -> impl FnOnce(sqlx::Error) -> ApiError + '_ {
@@ -676,20 +677,22 @@ fn stored_draft(
 }
 
 fn row_view(row: ToolRow) -> ToolView {
-    let (_, api_id, name, description, Db(schema), Db(request), source, edited, _) = row;
+    let (_, api_id, name, description, Db(schema), Db(request), source, edited, _, spec_changed) =
+        row;
     ToolView {
         draft: stored_draft(&name, &description, &schema, &request),
         preview: tool_json(&name, &description, &schema),
         source,
         edited,
-        spec_changed: false,
+        spec_changed,
         api_id,
     }
 }
 
 async fn fetch_tool(pool: &PgPool, server_id: i64, name: &str) -> Result<ToolRow, ApiError> {
     sqlx::query_as(
-        "SELECT id, api_id, name, description, input_schema, request, source, edited, spec_tool
+        "SELECT id, api_id, name, description, input_schema, request, source, edited, spec_tool,
+                (edited AND edited_hash IS NOT NULL AND spec_hash <> edited_hash)
          FROM tools WHERE server_id = $1 AND name = $2",
     )
     .bind(server_id)
@@ -768,7 +771,7 @@ async fn update_tool(
 ) -> Result<Json<ToolView>, ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
     let row = fetch_tool(&state.pool, server_id, &tool).await?;
-    let (id, api_id, _, _, Db(schema), Db(request), source, _, _) = row;
+    let (id, api_id, _, _, Db(schema), Db(request), source, _, _, _) = row;
     let new_name = if source == "spec" {
         // Only the name, the description, and the input table can change.
         let stored = stored_draft("", "", &schema, &request);
@@ -796,7 +799,8 @@ async fn update_tool(
         }
         let rows = draft.inputs.clone();
         sqlx::query(
-            "UPDATE tools SET name = $1, description = $2, input_schema = $3, edited = true
+            "UPDATE tools SET name = $1, description = $2, input_schema = $3, edited = true,
+                    edited_hash = spec_hash
              WHERE id = $4",
         )
         .bind(new_name)
@@ -838,14 +842,14 @@ async fn reset_tool(
 ) -> Result<Json<ToolView>, ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
     let row = fetch_tool(&state.pool, server_id, &tool).await?;
-    let (id, _, _, _, _, _, source, _, spec_tool) = row;
+    let (id, _, _, _, _, _, source, _, spec_tool, _) = row;
     let Some(Db(original)) = spec_tool.filter(|_| source == "spec") else {
         return Err(ApiError::NotASpecTool);
     };
     let original: ToolDef = serde_json::from_value(original).map_err(|_| ApiError::StoredTool)?;
     sqlx::query(
         "UPDATE tools SET name = $1, description = $2, input_schema = $3, request = $4,
-                edited = false WHERE id = $5",
+                edited = false, edited_hash = NULL WHERE id = $5",
     )
     .bind(&original.name)
     .bind(&original.description)

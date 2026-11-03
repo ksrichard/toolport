@@ -36,7 +36,7 @@ struct Args {
     #[arg(long)]
     base_url: Option<Url>,
 
-    /// The API name. The default is the spec title. An API with the same name gets replaced.
+    /// The API name. The default is the spec title. An API with the same name gets updated.
     #[arg(long)]
     api_name: Option<String>,
 }
@@ -97,13 +97,19 @@ async fn run(args: Args) -> Result<(), CliError> {
     } else {
         "existing"
     };
-    let api_state = if report.replaced { "replaced" } else { "added" };
+    let api_state = if report.replaced { "updated" } else { "added" };
     println!("server:   {} ({server_state})", args.server);
     println!("api:      {} ({api_state})", report.api_name);
     println!("base URL: {}", report.base_url);
     println!("tools:    {}", report.tools.len());
     for name in &report.tools {
         println!("  + {name}");
+    }
+    for name in &report.kept {
+        println!("  = {name} (edited, kept)");
+    }
+    for name in &report.removed {
+        println!("  - {name} (removed)");
     }
     if !report.skipped.is_empty() {
         println!("skipped:  {}", report.skipped.len());

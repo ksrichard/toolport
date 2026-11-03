@@ -31,10 +31,7 @@ use crate::{
     mcp_tokens::{self, AuthorizeError, McpCaller},
     secrets::{SecretsError, SecretsKey},
     state::AppState,
-    upstream::{
-        self, ApiTarget, CallOutput, DraftSecret, Outcome, UpstreamAuth, UpstreamCtx,
-        blocked_result,
-    },
+    upstream::{self, ApiTarget, CallOutput, DraftSecret, UpstreamAuth, UpstreamCtx},
     upstream_guard::BlockedAddress,
 };
 
@@ -210,21 +207,12 @@ impl ToolportMcp {
             allow_loopback: self.allow_local_upstream,
         };
 
-        // A blocked address is not an MCP error. The client gets a tool error and the call is saved.
-        let (result, outcome, latency_ms) =
-            match upstream::call_upstream(&ctx, &api, DraftSecret::Saved, &template, args).await {
-                Ok(CallOutput {
-                    result,
-                    outcome,
-                    trace,
-                }) => (
-                    result,
-                    outcome,
-                    u32::try_from(trace.latency_ms).unwrap_or(u32::MAX),
-                ),
-                Err(CallError::Blocked(_)) => (blocked_result(), Outcome::Failed, 0),
-                Err(other) => return Err(other),
-            };
+        let CallOutput {
+            result,
+            outcome,
+            trace,
+        } = upstream::call_upstream(&ctx, &api, DraftSecret::Saved, &template, args).await?;
+        let latency_ms = u32::try_from(trace.latency_ms).unwrap_or(u32::MAX);
         // The log has no arguments and no response text, because they can hold secrets.
         tracing::info!(
             server = %caller.server_name,

@@ -113,7 +113,12 @@ pub async fn call_upstream(
 ) -> Result<CallOutput, CallError> {
     let upstream = build_request(template, args)?;
     let url = upstream_url(&api.base_url, &upstream)?;
-    check_url(&url, ctx.allow_loopback)?;
+
+    let (auth_name, sealed, prefix) = match &api.auth {
+        UpstreamAuth::None => (None, None, ""),
+        UpstreamAuth::ApiKey { header, sealed } => (Some(header.as_str()), Some(sealed), ""),
+        UpstreamAuth::Bearer { sealed } => (Some(AUTHORIZATION.as_str()), Some(sealed), "Bearer "),
+    };
 
     let mut trace_headers = vec![("accept".to_owned(), "application/json".to_owned())];
     let mut builder = ctx
@@ -122,6 +127,10 @@ pub async fn call_upstream(
         .timeout(ctx.timeout)
         .header(ACCEPT, "application/json");
     for (name, value) in &upstream.headers {
+        // The API auth replaces a tool header with the same name.
+        if auth_name.is_some_and(|auth| auth.eq_ignore_ascii_case(name)) {
+            continue;
+        }
         let invalid = || CallError::InvalidHeader(name.clone());
         let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid())?;
         let header_value = HeaderValue::from_str(value).map_err(|_| invalid())?;
@@ -136,16 +145,12 @@ pub async fn call_upstream(
         trace_headers.push(("content-type".to_owned(), content_type.clone()));
     }
 
-    let (auth_name, sealed, prefix) = match &api.auth {
-        UpstreamAuth::None => (None, None, ""),
-        UpstreamAuth::ApiKey { header, sealed } => (Some(header.as_str()), Some(sealed), ""),
-        UpstreamAuth::Bearer { sealed } => (Some(AUTHORIZATION.as_str()), Some(sealed), "Bearer "),
-    };
+    // `opened` keeps the plain text until the end of the function, so we can mask the response.
+    let opened;
+    let mut plain_secret = "";
     if let Some(name) = auth_name {
-        // `opened` holds the plain text until the end of this block.
-        let opened;
-        let plain = match (&secret, sealed) {
-            (DraftSecret::New(plain), _) => *plain,
+        plain_secret = match (&secret, sealed) {
+            (DraftSecret::New(plain), _) => plain,
             (DraftSecret::Saved, Some(sealed)) => {
                 opened = open(ctx.secrets, api.id, sealed)?;
                 opened.expose()
@@ -155,7 +160,7 @@ pub async fn call_upstream(
         let invalid = || CallError::InvalidHeader(name.to_owned());
         let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid())?;
         let mut value =
-            HeaderValue::from_str(&format!("{prefix}{plain}")).map_err(|_| invalid())?;
+            HeaderValue::from_str(&format!("{prefix}{plain_secret}")).map_err(|_| invalid())?;
         value.set_sensitive(true);
         builder = builder.header(header_name, value);
         trace_headers.push((name.to_owned(), format!("{prefix}{MASK}")));
@@ -167,9 +172,33 @@ pub async fn call_upstream(
         headers: trace_headers,
         body,
     };
+    // reqwest does not check IP-literal hosts in its resolver, so we check the final URL here.
+    if check_url(&url, ctx.allow_loopback).is_err() {
+        return Ok(CallOutput {
+            result: blocked_result(),
+            outcome: Outcome::Failed,
+            trace: HttpTrace {
+                request: traced_request,
+                response: None,
+                latency_ms: 0,
+            },
+        });
+    }
     let started = Instant::now();
-    let (outcome, response) = send(builder).await;
+    let (mut outcome, mut response) = send(builder).await;
     let latency_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    // An upstream can echo the secret back. Neither the trace nor the tool result may show it.
+    if !plain_secret.is_empty() {
+        if let Outcome::Answered { text, .. } = &mut outcome {
+            *text = text.replace(plain_secret, MASK);
+        }
+        if let Some(response) = &mut response {
+            response.body = response.body.replace(plain_secret, MASK);
+            for (_, value) in &mut response.headers {
+                *value = value.replace(plain_secret, MASK);
+            }
+        }
+    }
     Ok(CallOutput {
         result: outcome.to_result(ctx.timeout),
         outcome,
@@ -449,5 +478,87 @@ mod tests {
         .await;
         assert!(matched(&output));
         assert!(!dump.contains("new-secret") && !dump.contains("old-secret"));
+    }
+
+    #[tokio::test]
+    async fn echoed_secret_is_masked_in_trace_and_result() {
+        let app = Router::new().route(
+            "/who",
+            get(|headers: HeaderMap| async move {
+                let auth = headers["authorization"].to_str().unwrap().to_owned();
+                ([("x-echo", auth.clone())], auth)
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = reqwest::Client::new();
+        let secrets = key();
+        let ctx = UpstreamCtx {
+            http: &http,
+            secrets: &secrets,
+            timeout: Duration::from_secs(5),
+            allow_loopback: true,
+        };
+        let api = ApiTarget {
+            id: 7,
+            base_url: format!("http://{addr}"),
+            auth: UpstreamAuth::Bearer {
+                sealed: seal(&key(), 7, "echo-secret").unwrap(),
+            },
+        };
+        let output = call_upstream(
+            &ctx,
+            &api,
+            DraftSecret::Saved,
+            &template(),
+            &JsonObject::new(),
+        )
+        .await
+        .unwrap();
+        let dump = serde_json::to_string(&output.trace).unwrap();
+        let result = serde_json::to_string(&output.result).unwrap();
+        assert!(!dump.contains("echo-secret"));
+        assert!(!result.contains("echo-secret"));
+        assert!(dump.contains("Bearer ••••"));
+    }
+
+    #[tokio::test]
+    async fn auth_replaces_a_tool_header_with_the_same_name() {
+        let mut template = template();
+        template.fixed_headers = vec![("Authorization".into(), "Bearer from-tool".into())];
+        let http = reqwest::Client::new();
+        let secrets = key();
+        let ctx = UpstreamCtx {
+            http: &http,
+            secrets: &secrets,
+            timeout: Duration::from_secs(5),
+            allow_loopback: true,
+        };
+        let api = ApiTarget {
+            id: 7,
+            base_url: fake("authorization", "Bearer from-api").await,
+            auth: UpstreamAuth::Bearer {
+                sealed: seal(&key(), 7, "from-api").unwrap(),
+            },
+        };
+        let output = call_upstream(
+            &ctx,
+            &api,
+            DraftSecret::Saved,
+            &template,
+            &JsonObject::new(),
+        )
+        .await
+        .unwrap();
+        assert!(matched(&output));
+        let auth_headers: Vec<_> = output
+            .trace
+            .request
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .collect();
+        assert_eq!(auth_headers.len(), 1);
     }
 }

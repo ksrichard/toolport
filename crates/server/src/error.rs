@@ -91,6 +91,16 @@ pub enum ApiError {
     Secrets(#[from] SecretsError),
     #[error("an internal error happened")]
     StoredAuth,
+    #[error("an internal error happened")]
+    StoredTool,
+    #[error("the tool name {0} is already in use")]
+    ToolNameTaken(String),
+    #[error("a spec tool can change only its name, description, and inputs")]
+    SpecToolFixed,
+    #[error("only a tool from a spec can be reset")]
+    NotASpecTool,
+    #[error("a tool from a spec cannot be deleted")]
+    SpecToolCannotBeDeleted,
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -111,7 +121,8 @@ impl ApiError {
             | Self::TokenSigning(_)
             | Self::Encode(_)
             | Self::Secrets(_)
-            | Self::StoredAuth => StatusCode::INTERNAL_SERVER_ERROR,
+            | Self::StoredAuth
+            | Self::StoredTool => StatusCode::INTERNAL_SERVER_ERROR,
             Self::TestCall(error) => match error {
                 CallError::Argument(_) | CallError::InvalidHeader(_) | CallError::BaseUrl(_) => {
                     StatusCode::UNPROCESSABLE_ENTITY
@@ -122,8 +133,11 @@ impl ApiError {
             | Self::InvalidApiName
             | Self::InvalidAuthHeader
             | Self::MissingSecret
-            | Self::SpecApiFixed => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::ApiNameTaken(_) => StatusCode::CONFLICT,
+            | Self::SpecApiFixed
+            | Self::SpecToolFixed
+            | Self::NotASpecTool
+            | Self::SpecToolCannotBeDeleted => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::ApiNameTaken(_) | Self::ToolNameTaken(_) => StatusCode::CONFLICT,
             Self::InvalidServerName
             | Self::InvalidSpecUrl
             | Self::SpecNotText
@@ -158,13 +172,18 @@ impl ApiError {
             | Self::TokenSigning(_)
             | Self::Encode(_)
             | Self::Secrets(_)
-            | Self::StoredAuth => "internal_error",
+            | Self::StoredAuth
+            | Self::StoredTool => "internal_error",
             Self::Draft(error) => error.code(),
             Self::InvalidApiName => "invalid_api_name",
             Self::ApiNameTaken(_) => "api_name_taken",
             Self::InvalidAuthHeader => "invalid_auth_header",
             Self::MissingSecret => "missing_secret",
             Self::SpecApiFixed => "spec_api_fixed",
+            Self::ToolNameTaken(_) => "tool_name_taken",
+            Self::SpecToolFixed => "spec_tool_fixed",
+            Self::NotASpecTool => "not_a_spec_tool",
+            Self::SpecToolCannotBeDeleted => "spec_tool_cannot_be_deleted",
             Self::TestCall(error) => match error {
                 CallError::Argument(_) | CallError::InvalidHeader(_) | CallError::BaseUrl(_) => {
                     "invalid_test_call"

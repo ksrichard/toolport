@@ -9,7 +9,11 @@ use axum::{
     routing::get,
 };
 use serde_json::{Value, json};
-use server::state::AppState;
+use server::{
+    import::{ImportRequest, Owner, import_spec},
+    mcp_tokens,
+    state::AppState,
+};
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tower::ServiceExt;
@@ -339,4 +343,402 @@ fn draft_to_tool_maps_inputs() {
         draft_to_tool(&parsed),
         Err(DraftError::InvalidToolName(_))
     ));
+}
+
+const PETSTORE: &str = include_str!("../../core/tests/fixtures/petstore.json");
+const HOST: &str = "toolport.test";
+
+fn forecast_draft() -> Value {
+    json!({
+        "name": "getForecast", "description": "Gets the forecast", "method": "GET",
+        "path": "/forecast", "query": "latitude={lat}&longitude={lon}", "headers": [],
+        "inputs": [
+            { "name": "lat", "input_type": "number", "required": true, "description": "Latitude" },
+            { "name": "lon", "input_type": "number", "required": true, "description": "" },
+        ],
+    })
+}
+
+/// A manual API on the fake upstream and a manual tool on it. Returns the API id and the view.
+async fn add_forecast(app: &App) -> (i64, Value) {
+    let api_id = app.create_api(&fake_upstream().await, SECRET).await;
+    let (status, view) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": forecast_draft() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{view}");
+    (api_id, view)
+}
+
+async fn import_petstore(app: &App) {
+    import_spec(
+        &app.state.pool,
+        ImportRequest {
+            owner: Owner::Login("octocat"),
+            server: "pets",
+            api_name: None,
+            spec_text: PETSTORE,
+            base_url: Some("https://petstore.example/api/v3".parse().unwrap()),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// One MCP session on the server `pets`.
+struct Mcp {
+    router: Router,
+    token: String,
+    session: String,
+}
+
+impl Mcp {
+    async fn post(&self, session: Option<&str>, body: Value) -> Response {
+        let mut request = Request::post("/mcp/pets")
+            .header(header::HOST, HOST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header(header::AUTHORIZATION, format!("Bearer {}", self.token));
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let request = request.body(Body::from(body.to_string())).unwrap();
+        self.router.clone().oneshot(request).await.unwrap()
+    }
+
+    async fn connect(app: &App) -> Self {
+        let ttl = std::time::Duration::from_secs(3600);
+        let token = mcp_tokens::create(&app.state.pool, &app.state.auth.jwt, "pets", "t", ttl)
+            .await
+            .unwrap()
+            .value;
+        let mut mcp = Self {
+            router: app.router.clone(),
+            token,
+            session: String::new(),
+        };
+        let init = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": { "name": "test", "version": "0" },
+            },
+        });
+        let response = mcp.post(None, init).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        mcp.session = response.headers()["mcp-session-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let ready = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        let response = mcp.post(Some(&mcp.session), ready).await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        mcp
+    }
+
+    /// Returns the `result` of the request.
+    async fn request(&self, method: &str, params: Value) -> Value {
+        let body = json!({ "jsonrpc": "2.0", "id": 2, "method": method, "params": params });
+        let response = self.post(Some(&self.session), body).await;
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        let data = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .find(|data| !data.is_empty())
+            .unwrap_or_else(|| panic!("no SSE message in: {text}"));
+        let message: Value = serde_json::from_str(data).unwrap();
+        message["result"].clone()
+    }
+
+    async fn listed(&self, name: &str) -> Value {
+        let list = self.request("tools/list", json!({})).await;
+        list["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is not listed"))
+            .clone()
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn create_manual_tool_appears_in_tools_list(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let (_, view) = add_forecast(&app).await;
+    assert_eq!(view["source"], "manual");
+    assert_eq!(view["edited"], false);
+
+    let listed = Mcp::connect(&app).await.listed("getForecast").await;
+    // rmcp may add keys such as `title` or `annotations`. They must stay null or absent.
+    let extra: Vec<&String> = listed
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(key, value)| {
+            !["name", "description", "inputSchema"].contains(&key.as_str()) && !value.is_null()
+        })
+        .map(|(key, _)| key)
+        .collect();
+    assert!(extra.is_empty(), "extra keys: {extra:?}");
+    for key in ["name", "description", "inputSchema"] {
+        assert_eq!(listed[key], view["preview"][key], "key {key}");
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn manual_tool_call_works_end_to_end(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    add_forecast(&app).await;
+    let mcp = Mcp::connect(&app).await;
+    let result = mcp
+        .request(
+            "tools/call",
+            json!({ "name": "getForecast", "arguments": { "lat": 47.5, "lon": 8.5 } }),
+        )
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("latitude=47.5&longitude=8.5"), "{text}");
+    assert!(text.contains("\"token_ok\":true"), "{text}");
+}
+
+async fn petstore_status_view(app: &App) -> Value {
+    let (status, view) = app
+        .json(
+            "GET",
+            "/api/servers/pets/tools/findPetsByStatus",
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    view
+}
+
+fn save_body(view: &Value) -> Value {
+    json!({ "api_id": view["api_id"], "draft": view["draft"] })
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn edit_spec_tool_keeps_enum(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = petstore_status_view(&app).await;
+    assert_eq!(view["source"], "spec");
+    let mut body = save_body(&view);
+    body["draft"]["description"] = json!("Finds pets by status");
+    let (status, saved) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["edited"], true);
+    assert_eq!(saved["draft"]["description"], "Finds pets by status");
+
+    let (schema,): (Value,) =
+        sqlx::query_as("SELECT input_schema FROM tools WHERE name = 'findPetsByStatus'")
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap();
+    assert!(
+        schema["properties"]["status"]["enum"].is_array(),
+        "{schema}"
+    );
+    assert_eq!(schema, view["preview"]["inputSchema"]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn edit_spec_tool_cannot_change_path(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = petstore_status_view(&app).await;
+    for (field, value) in [
+        ("path", json!("/other")),
+        ("method", json!("POST")),
+        ("query", json!("x={status}")),
+        ("headers", json!([{ "name": "X-A", "value": "b" }])),
+        ("body_schema", json!({ "type": "object" })),
+    ] {
+        let mut body = save_body(&view);
+        body["draft"][field] = value;
+        let (status, error) = app
+            .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+        assert_eq!(error["error"], "spec_tool_fixed", "{field}");
+    }
+    let mut body = save_body(&view);
+    body["api_id"] = json!(view["api_id"].as_i64().unwrap() + 1000);
+    let (status, error) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "spec_tool_fixed");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reset_restores_the_spec_version(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = petstore_status_view(&app).await;
+    let mut body = save_body(&view);
+    body["draft"]["description"] = json!("Changed");
+    body["draft"]["inputs"][0]["description"] = json!("Changed input");
+    body["draft"]["inputs"][0]["required"] = json!(true);
+    app.json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+
+    let (status, reset) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools/findPetsByStatus/reset",
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
+    assert_eq!(reset["edited"], false);
+    assert_eq!(reset["preview"], view["preview"]);
+    assert_eq!(reset["draft"]["description"], view["draft"]["description"]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reset_refuses_a_manual_tool(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    add_forecast(&app).await;
+    let (status, error) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools/getForecast/reset",
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "not_a_spec_tool");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn delete_spec_tool_is_refused(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let (status, error) = app
+        .json(
+            "DELETE",
+            "/api/servers/pets/tools/findPetsByStatus",
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "spec_tool_cannot_be_deleted");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn delete_manual_tool_works(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    add_forecast(&app).await;
+    let (status, _) = app
+        .text("DELETE", "/api/servers/pets/tools/getForecast", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = app
+        .json("GET", "/api/servers/pets/tools/getForecast", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn duplicate_name_is_a_conflict(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let (api_id, _) = add_forecast(&app).await;
+    let (status, error) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": forecast_draft() }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"], "tool_name_taken");
+}
+
+fn with_tool_body(server: &str, draft: Value) -> Value {
+    json!({
+        "server": server,
+        "api": {
+            "name": "weather", "base_url": "https://a.example/v1",
+            "auth": { "type": "bearer", "secret": SECRET },
+        },
+        "draft": draft,
+    })
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn create_server_with_tool_is_atomic(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let mut bad = forecast_draft();
+    bad["query"] = json!("latitude={missing}");
+    let (status, error) = app
+        .json(
+            "POST",
+            "/api/servers/with-tool",
+            with_tool_body("fresh", bad),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "unknown_placeholder");
+    let (servers, apis): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM servers WHERE name = 'fresh'), (SELECT count(*) FROM apis)",
+    )
+    .fetch_one(&app.state.pool)
+    .await
+    .unwrap();
+    assert_eq!((servers, apis), (0, 0));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn create_server_with_tool_works(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let body = with_tool_body("fresh", forecast_draft());
+    let (status, summary) = app.json("POST", "/api/servers/with-tool", body).await;
+    assert_eq!(status, StatusCode::CREATED, "{summary}");
+    assert_eq!(summary["name"], "fresh");
+    assert_eq!(summary["tools"], 1);
+    let (status, view) = app
+        .json("GET", "/api/servers/fresh/tools/getForecast", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["source"], "manual");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn save_twice_gives_a_valid_tool(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let (api_id, _) = add_forecast(&app).await;
+    let mcp = Mcp::connect(&app).await;
+    for description in ["first", "second"] {
+        let mut draft = forecast_draft();
+        draft["description"] = json!(description);
+        let (status, view) = app
+            .json(
+                "PUT",
+                "/api/servers/pets/tools/getForecast",
+                json!({ "api_id": api_id, "draft": draft }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+    }
+    let listed = mcp.listed("getForecast").await;
+    assert_eq!(listed["description"], "second");
+    let (_, view) = app
+        .json("GET", "/api/servers/pets/tools/getForecast", json!(null))
+        .await;
+    assert_eq!(view["draft"]["description"], "second");
+    assert_eq!(view["draft"]["query"], "latitude={lat}&longitude={lon}");
+    assert_eq!(view["preview"]["inputSchema"], listed["inputSchema"]);
 }

@@ -154,8 +154,9 @@ pub async fn import_spec(
 
     for tool in &conversion.tools {
         sqlx::query(
-            "INSERT INTO tools (api_id, server_id, name, description, input_schema, request)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO tools (api_id, server_id, name, description, input_schema, request,
+                                source, spec_tool, operation)
+             VALUES ($1, $2, $3, $4, $5, $6, 'spec', $7, $8)",
         )
         .bind(api_id)
         .bind(server_id)
@@ -163,6 +164,8 @@ pub async fn import_spec(
         .bind(&tool.description)
         .bind(Json(&tool.input_schema))
         .bind(Json(&tool.request))
+        .bind(Json(tool))
+        .bind(format!("{} {}", tool.request.method, tool.request.path))
         .execute(&mut *tx)
         .await?;
     }

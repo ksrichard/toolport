@@ -52,6 +52,10 @@ pub struct ToolSummary {
     pub path: String,
     pub api: String,
     pub enabled: bool,
+    /// `spec` or `manual`.
+    pub source: String,
+    pub edited: bool,
+    pub spec_changed: bool,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -142,7 +146,7 @@ pub async fn owned_server_id(pool: &PgPool, user_id: i64, name: &str) -> Result<
         .ok_or(ApiError::NotFound)
 }
 
-fn mcp_url(state: &AppState, name: &str) -> String {
+pub(crate) fn mcp_url(state: &AppState, name: &str) -> String {
     let base = state.auth.public_url.as_str().trim_end_matches('/');
     format!("{base}/mcp/{name}")
 }
@@ -213,7 +217,8 @@ async fn list_tools(
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
     let tools = sqlx::query_as(
         "SELECT t.name, t.description, t.request->>'method' AS method,
-                t.request->>'path' AS path, a.name AS api, t.enabled
+                t.request->>'path' AS path, a.name AS api, t.enabled,
+                t.source, t.edited, false AS spec_changed
          FROM tools t JOIN apis a ON a.id = t.api_id
          WHERE t.server_id = $1 ORDER BY t.id",
     )

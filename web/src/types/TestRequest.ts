@@ -2,4 +2,8 @@
 import type { TestApi } from "./TestApi";
 import type { ToolDraft } from "./ToolDraft";
 
-export type TestRequest = { draft: ToolDraft, api: TestApi, args: Record<string, unknown>, };
+export type TestRequest = { draft: ToolDraft, api: TestApi, args: Record<string, unknown>, 
+/**
+ * The name of a saved spec tool of this server. The test then uses its stored request.
+ */
+spec_tool?: string, };

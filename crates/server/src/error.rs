@@ -101,6 +101,8 @@ pub enum ApiError {
     NotASpecTool,
     #[error("a tool from a spec cannot be deleted")]
     SpecToolCannotBeDeleted,
+    #[error("at least one tool of the server must stay on")]
+    LastEnabledTool,
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -136,7 +138,8 @@ impl ApiError {
             | Self::SpecApiFixed
             | Self::SpecToolFixed
             | Self::NotASpecTool
-            | Self::SpecToolCannotBeDeleted => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::SpecToolCannotBeDeleted
+            | Self::LastEnabledTool => StatusCode::UNPROCESSABLE_ENTITY,
             Self::ApiNameTaken(_) | Self::ToolNameTaken(_) => StatusCode::CONFLICT,
             Self::InvalidServerName
             | Self::InvalidSpecUrl
@@ -184,6 +187,7 @@ impl ApiError {
             Self::SpecToolFixed => "spec_tool_fixed",
             Self::NotASpecTool => "not_a_spec_tool",
             Self::SpecToolCannotBeDeleted => "spec_tool_cannot_be_deleted",
+            Self::LastEnabledTool => "last_enabled_tool",
             Self::TestCall(error) => match error {
                 CallError::Argument(_) | CallError::InvalidHeader(_) | CallError::BaseUrl(_) => {
                     "invalid_test_call"

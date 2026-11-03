@@ -157,7 +157,7 @@ async fn edit_api_without_secret_keeps_the_old_one(pool: PgPool) {
     let (status, result) = app
         .json(
             "POST",
-            "/api/servers/pets/tools/test",
+            "/api/servers/pets/tool-test",
             test_body("latitude={lat}", api),
         )
         .await;
@@ -207,7 +207,7 @@ async fn test_route_returns_mcp_result_and_masked_trace(pool: PgPool) {
     let (status, text) = app
         .text(
             "POST",
-            "/api/servers/pets/tools/test",
+            "/api/servers/pets/tool-test",
             test_body("latitude={lat}", api),
         )
         .await;
@@ -233,7 +233,7 @@ async fn test_route_uses_saved_secret(pool: PgPool) {
     let (status, result) = app
         .json(
             "POST",
-            "/api/servers/pets/tools/test",
+            "/api/servers/pets/tool-test",
             test_body("latitude={lat}", api),
         )
         .await;
@@ -249,7 +249,7 @@ async fn test_route_reports_draft_errors(pool: PgPool) {
         json!({ "kind": "draft", "base_url": "https://a.example", "auth": { "type": "none" } });
     let mut body = test_body("latitude={lat}&longitude={lon}", api);
     body["args"] = json!({});
-    let (status, error) = app.json("POST", "/api/servers/pets/tools/test", body).await;
+    let (status, error) = app.json("POST", "/api/servers/pets/tool-test", body).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(error["error"], "unknown_placeholder");
 }
@@ -262,7 +262,7 @@ async fn test_route_needs_a_secret_for_a_draft_with_auth(pool: PgPool) {
     let (status, error) = app
         .json(
             "POST",
-            "/api/servers/pets/tools/test",
+            "/api/servers/pets/tool-test",
             test_body("latitude={lat}", api),
         )
         .await;
@@ -278,7 +278,7 @@ async fn test_route_does_not_save_a_call(pool: PgPool) {
     let (status, _) = app
         .json(
             "POST",
-            "/api/servers/pets/tools/test",
+            "/api/servers/pets/tool-test",
             test_body("latitude={lat}", api),
         )
         .await;
@@ -298,7 +298,7 @@ async fn test_route_to_blocked_address(pool: PgPool) {
     let (status, result) = app
         .json(
             "POST",
-            "/api/servers/pets/tools/test",
+            "/api/servers/pets/tool-test",
             test_body("latitude={lat}", api),
         )
         .await;
@@ -639,9 +639,132 @@ async fn delete_spec_tool_is_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
+async fn delete_last_enabled_tool_is_refused(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let (api_id, _) = add_forecast(&app).await;
+    let mut other = forecast_draft();
+    other["name"] = json!("other");
+    app.json(
+        "POST",
+        "/api/servers/pets/tools",
+        json!({ "api_id": api_id, "draft": other }),
+    )
+    .await;
+    sqlx::query("UPDATE tools SET enabled = false WHERE name = 'other'")
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+    let (status, error) = app
+        .json("DELETE", "/api/servers/pets/tools/getForecast", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "last_enabled_tool");
+    // A disabled tool can go.
+    let (status, _) = app
+        .text("DELETE", "/api/servers/pets/tools/other", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn tool_named_test_can_be_read_and_deleted(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let api_id = app.create_api(&fake_upstream().await, SECRET).await;
+    let mut named = forecast_draft();
+    named["name"] = json!("test");
+    let body = json!({ "api_id": api_id, "draft": named });
+    let (status, _) = app
+        .json("POST", "/api/servers/pets/tools", body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mut second = forecast_draft();
+    second["name"] = json!("keep");
+    app.json(
+        "POST",
+        "/api/servers/pets/tools",
+        json!({ "api_id": api_id, "draft": second }),
+    )
+    .await;
+    let (status, view) = app
+        .json("GET", "/api/servers/pets/tools/test", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["draft"]["name"], "test");
+    let (status, _) = app
+        .text("DELETE", "/api/servers/pets/tools/test", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn input_named_body_is_reserved(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let api_id = app.create_api(&fake_upstream().await, SECRET).await;
+    let mut draft = forecast_draft();
+    draft["body_schema"] = json!({ "type": "object" });
+    draft["inputs"].as_array_mut().unwrap().push(
+        json!({ "name": "body", "input_type": "string", "required": false, "description": "" }),
+    );
+    let (status, error) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": draft }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "reserved_input_name");
+
+    // A spec tool with a body rejects a `body` row too.
+    import_petstore(&app).await;
+    let (_, view) = app
+        .json("GET", "/api/servers/pets/tools/addPet", json!(null))
+        .await;
+    let mut body = save_body(&view);
+    body["draft"]["inputs"].as_array_mut().unwrap().push(
+        json!({ "name": "body", "input_type": "string", "required": false, "description": "" }),
+    );
+    let (status, error) = app
+        .json("PUT", "/api/servers/pets/tools/addPet", body)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "reserved_input_name");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn spec_tool_input_names_cannot_change(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = petstore_status_view(&app).await;
+    let mut renamed = save_body(&view);
+    renamed["draft"]["inputs"][0]["name"] = json!("state");
+    let mut added = save_body(&view);
+    added["draft"]["inputs"].as_array_mut().unwrap().push(
+        json!({ "name": "extra", "input_type": "string", "required": false, "description": "" }),
+    );
+    let mut removed = save_body(&view);
+    removed["draft"]["inputs"] = json!([]);
+    for body in [renamed, added, removed] {
+        let (status, error) = app
+            .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error["error"], "spec_tool_fixed");
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
 async fn delete_manual_tool_works(pool: PgPool) {
     let app = App::new(pool, true).await;
-    add_forecast(&app).await;
+    let (api_id, _) = add_forecast(&app).await;
+    let mut other = forecast_draft();
+    other["name"] = json!("other");
+    app.json(
+        "POST",
+        "/api/servers/pets/tools",
+        json!({ "api_id": api_id, "draft": other }),
+    )
+    .await;
     let (status, _) = app
         .text("DELETE", "/api/servers/pets/tools/getForecast", json!(null))
         .await;

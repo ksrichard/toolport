@@ -143,6 +143,8 @@ pub enum DraftError {
     BadQueryTemplate(#[from] TemplateError),
     #[error("the input {0} has a complex type, which a manual tool cannot use")]
     ComplexInput(String),
+    #[error("the input name body is reserved for the request body")]
+    ReservedInputName,
 }
 
 impl DraftError {
@@ -153,6 +155,7 @@ impl DraftError {
             Self::PathInputOptional(_) => "path_input_optional",
             Self::BadQueryTemplate(_) => "bad_query_template",
             Self::ComplexInput(_) => "complex_input_on_manual_tool",
+            Self::ReservedInputName => "reserved_input_name",
         }
     }
 }
@@ -162,7 +165,7 @@ pub fn routes() -> Router<AppState> {
         .route("/servers/{name}/apis", get(list_apis))
         .route("/servers/{name}/apis/manual", post(create_api))
         .route("/servers/{name}/apis/{id}", put(update_api))
-        .route("/servers/{name}/tools/test", post(test_tool))
+        .route("/servers/{name}/tool-test", post(test_tool))
         .route("/servers/{name}/tools", post(create_tool))
         .route(
             "/servers/{name}/tools/{tool}",
@@ -218,6 +221,9 @@ pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
         .find(|r| r.input_type == InputType::Complex)
     {
         return Err(DraftError::ComplexInput(row.name.clone()));
+    }
+    if draft.body_schema.is_some() && draft.inputs.iter().any(|r| r.name == BODY_ARGUMENT) {
+        return Err(DraftError::ReservedInputName);
     }
     let row_of = |input: &str| {
         draft
@@ -777,10 +783,18 @@ async fn update_tool(
             return Err(ApiError::SpecToolFixed);
         }
         let new_name = valid_tool_name(&draft.name)?;
-        let mut rows = draft.inputs.clone();
-        if request.body.is_some() {
-            rows.retain(|row| row.name != BODY_ARGUMENT);
+        if request.body.is_some() && draft.inputs.iter().any(|r| r.name == BODY_ARGUMENT) {
+            return Err(DraftError::ReservedInputName.into());
         }
+        // The request template maps inputs by name, so the names cannot change.
+        let mut old_names: Vec<&str> = stored.inputs.iter().map(|r| r.name.as_str()).collect();
+        let mut new_names: Vec<&str> = draft.inputs.iter().map(|r| r.name.as_str()).collect();
+        old_names.sort_unstable();
+        new_names.sort_unstable();
+        if old_names != new_names {
+            return Err(ApiError::SpecToolFixed);
+        }
+        let rows = draft.inputs.clone();
         sqlx::query(
             "UPDATE tools SET name = $1, description = $2, input_schema = $3, edited = true
              WHERE id = $4",
@@ -856,11 +870,23 @@ async fn delete_tool(
     if row.6 == "spec" {
         return Err(ApiError::SpecToolCannotBeDeleted);
     }
+    // The lock keeps two deletes from removing the last two enabled tools together.
+    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    let enabled: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM tools WHERE server_id = $1 AND enabled FOR UPDATE")
+            .bind(server_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(ApiError::Database)?;
+    if enabled == [row.0] {
+        return Err(ApiError::LastEnabledTool);
+    }
     sqlx::query("DELETE FROM tools WHERE id = $1")
         .bind(row.0)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await
         .map_err(ApiError::Database)?;
+    tx.commit().await.map_err(ApiError::Database)?;
     state.peers.notify_tools_changed(server_id).await;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -899,11 +899,23 @@ async fn client_event_goes_only_to_its_own_server(pool: PgPool) {
     let mut events = SseReader::new(open_live(&app, "other", Some(&access)).await);
     events.next().await;
 
-    let client = Client::connect(&app, &state, "pets").await;
-    client.tool_names().await;
-    let other = Client::connect(&app, &state, "other").await;
+    let ttl = Duration::from_secs(3600);
+    let keys = &state.auth.jwt;
+    let pets_token = mcp_tokens::create(&pool, keys, "pets", "pets-token", ttl)
+        .await
+        .unwrap()
+        .value;
+    let other_token = mcp_tokens::create(&pool, keys, "other", "other-token", ttl)
+        .await
+        .unwrap()
+        .value;
+
+    let pets = Client::connect_with(&app, "pets", pets_token).await;
+    pets.tool_names().await;
+    let other = Client::connect_with(&app, "other", other_token).await;
     other.tool_names().await;
+    // The pets event must not arrive here, so the first event is the one of `other`.
     let (name, first) = events.next().await;
     assert_eq!(name, "client");
-    assert_eq!(first["tools_sent"], 4);
+    assert_eq!(first["token_name"], "other-token");
 }

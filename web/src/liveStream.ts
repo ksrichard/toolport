@@ -29,8 +29,8 @@ export interface LiveState {
   calls: CallRecord[]
   /** Ids of calls that arrived after the snapshot. The call log highlights them. */
   fresh: Set<number>
-  /** The first request of the first new client since the stream opened. */
-  firstRequest: FirstRequest | null
+  /** The first request of each new client since the stream opened, the oldest first. */
+  firstRequests: FirstRequest[]
 }
 
 type Action =
@@ -48,7 +48,7 @@ const initial: LiveState = {
   buckets: new Map(),
   calls: [],
   fresh: new Set(),
-  firstRequest: null,
+  firstRequests: [],
 }
 
 function bucketsFrom(list: Bucket[]): LiveState['buckets'] {
@@ -91,7 +91,7 @@ function reduce(state: LiveState, action: Action): LiveState {
     case 'metrics':
       return { ...state, metrics: action.data.metrics, clients: action.data.clients }
     case 'client':
-      return state.firstRequest ? state : { ...state, firstRequest: action.data }
+      return { ...state, firstRequests: [...state.firstRequests, action.data] }
   }
 }
 

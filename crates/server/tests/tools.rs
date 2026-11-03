@@ -1341,33 +1341,28 @@ async fn fixed_headers_with_credentials_are_refused(pool: PgPool) {
     assert_eq!(status, StatusCode::CREATED);
 }
 
-#[sqlx::test(migrations = "../../migrations")]
-async fn first_import_of_an_api_notifies_the_open_sessions(pool: PgPool) {
-    let app = App::new(pool, true).await;
-    let mcp = Mcp::connect(&app).await;
-    // The session is known to the server after its first tools request.
-    mcp.request("tools/list", json!({})).await;
-    let request = Request::get("/mcp/pets")
-        .header(header::HOST, HOST)
-        .header(header::ACCEPT, "text/event-stream")
-        .header(header::AUTHORIZATION, format!("Bearer {}", mcp.token))
-        .header("mcp-session-id", &mcp.session)
-        .body(Body::empty())
-        .unwrap();
-    let mut stream = app
-        .router
-        .clone()
-        .oneshot(request)
-        .await
-        .unwrap()
-        .into_body();
+impl Mcp {
+    /// Opens the GET stream of the session, which carries server notifications.
+    async fn notifications(&self) -> Body {
+        // The session is known to the server after its first tools request.
+        self.request("tools/list", json!({})).await;
+        let request = Request::get("/mcp/pets")
+            .header(header::HOST, HOST)
+            .header(header::ACCEPT, "text/event-stream")
+            .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
+            .header("mcp-session-id", &self.session)
+            .body(Body::empty())
+            .unwrap();
+        self.router
+            .clone()
+            .oneshot(request)
+            .await
+            .unwrap()
+            .into_body()
+    }
+}
 
-    // A new API, not a re-import.
-    let body = json!({ "source": "text", "spec": PETSTORE, "base_url": "https://a.example/v3" });
-    let (status, imported) = app.json("POST", "/api/servers/pets/apis", body).await;
-    assert_eq!(status, StatusCode::OK, "{imported}");
-    assert_eq!(imported[0]["replaced"], false);
-
+async fn wait_for_list_changed(mut stream: Body) {
     let mut seen = String::new();
     while !seen.contains("notifications/tools/list_changed") {
         let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.frame())
@@ -1379,6 +1374,144 @@ async fn first_import_of_an_api_notifies_the_open_sessions(pool: PgPool) {
             seen.push_str(&String::from_utf8_lossy(data));
         }
     }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn first_import_of_an_api_notifies_the_open_sessions(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let stream = Mcp::connect(&app).await.notifications().await;
+
+    // A new API, not a re-import.
+    let body = json!({ "source": "text", "spec": PETSTORE, "base_url": "https://a.example/v3" });
+    let (status, imported) = app.json("POST", "/api/servers/pets/apis", body).await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    assert_eq!(imported[0]["replaced"], false);
+    wait_for_list_changed(stream).await;
+}
+
+fn enabled_path(tool: &str) -> String {
+    format!("/api/servers/pets/tools/{tool}/enabled")
+}
+
+async fn set_enabled(app: &App, tool: &str, enabled: bool) -> (StatusCode, Value) {
+    app.json("PUT", &enabled_path(tool), json!({ "enabled": enabled }))
+        .await
+}
+
+async fn listed_names(mcp: &Mcp) -> Vec<String> {
+    let list = mcp.request("tools/list", json!({})).await;
+    list["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn turning_a_tool_off_and_on_changes_tools_list(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let mcp = Mcp::connect(&app).await;
+    assert!(listed_names(&mcp).await.contains(&"getPetById".to_owned()));
+
+    let (status, _) = set_enabled(&app, "getPetById", false).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!listed_names(&mcp).await.contains(&"getPetById".to_owned()));
+    let (_, tools) = app
+        .json("GET", "/api/servers/pets/tools", json!(null))
+        .await;
+    let row = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "getPetById")
+        .unwrap()
+        .clone();
+    assert_eq!(row["enabled"], false);
+
+    let (status, _) = set_enabled(&app, "getPetById", true).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(listed_names(&mcp).await.contains(&"getPetById".to_owned()));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn turning_a_tool_off_notifies_the_open_sessions(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let stream = Mcp::connect(&app).await.notifications().await;
+    let (status, _) = set_enabled(&app, "getPetById", false).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    wait_for_list_changed(stream).await;
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn turning_off_the_last_enabled_tool_is_refused(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    add_forecast(&app).await;
+    let (status, error) = set_enabled(&app, "getForecast", false).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "last_enabled_tool");
+    // Turning on a tool that is on already is fine.
+    let (status, _) = set_enabled(&app, "getForecast", true).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn two_concurrent_turn_offs_leave_one_tool_on(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let (api_id, _) = add_forecast(&app).await;
+    let mut other = forecast_draft();
+    other["name"] = json!("other");
+    let (status, _) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tools",
+            json!({ "api_id": api_id, "draft": other }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (first, second) = tokio::join!(
+        set_enabled(&app, "getForecast", false),
+        set_enabled(&app, "other", false),
+    );
+    let mut statuses = [first.0, second.0];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::NO_CONTENT, StatusCode::UNPROCESSABLE_ENTITY]
+    );
+    let on: i64 = sqlx::query_scalar("SELECT count(*) FROM tools WHERE enabled")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(on, 1);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn set_enabled_on_unknown_tool_or_other_users_server_is_not_found(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let (status, error) = set_enabled(&app, "noSuchTool", false).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"], "not_found");
+
+    let other = common::create_user(&app.state.pool, 2, "other").await;
+    let response = app
+        .as_user(
+            other,
+            "PUT",
+            &enabled_path("getPetById"),
+            json!({ "enabled": false }),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let off: i64 = sqlx::query_scalar("SELECT count(*) FROM tools WHERE NOT enabled")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(off, 0);
 }
 
 #[sqlx::test(migrations = "../../migrations")]

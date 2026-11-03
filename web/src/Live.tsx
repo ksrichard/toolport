@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { getTools } from './api'
 import { CopyButton } from './CopyButton'
 import { BUCKET_MS, CHART_BUCKETS, useLiveStream, type LiveState, type StreamStatus } from './liveStream'
 import type { CallResult } from './types/CallResult'
 import type { ServerSummary } from './types/ServerSummary'
-import type { ToolSummary } from './types/ToolSummary'
+import { ToolSwitch } from './ToolSwitch'
+import { useToolList } from './toolList'
 
 const STATUS_TEXT: Record<StreamStatus, string> = {
   connecting: 'Connecting',
@@ -45,9 +45,10 @@ interface LiveProps {
   onConnectClient: () => void
   /** Opens the builder. Null opens it for a new tool. */
   onOpenTool: (tool: string | null) => void
+  onToolsChanged?: () => void
 }
 
-export function Live({ server, onConnectClient, onOpenTool }: LiveProps) {
+export function Live({ server, onConnectClient, onOpenTool, onToolsChanged }: LiveProps) {
   const [paused, setPaused] = useState(false)
   const live = useLiveStream(server.name, paused)
   const now = useNow(BUCKET_MS)
@@ -118,7 +119,7 @@ export function Live({ server, onConnectClient, onOpenTool }: LiveProps) {
         </div>
         <div className="col">
           <Clients live={live} now={now} />
-          <Tools server={server.name} onOpenTool={onOpenTool} />
+          <Tools server={server.name} onOpenTool={onOpenTool} onToolsChanged={onToolsChanged} />
         </div>
       </div>
     </>
@@ -262,20 +263,17 @@ function Clients({ live, now }: { live: LiveState; now: number }) {
   )
 }
 
-function Tools({ server, onOpenTool }: { server: string; onOpenTool: (tool: string | null) => void }) {
-  const [tools, setTools] = useState<ToolSummary[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    getTools(server).then(
-      (list) => !cancelled && setTools(list),
-      (e: Error) => !cancelled && setError(e.message),
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [server])
+function Tools({
+  server,
+  onOpenTool,
+  onToolsChanged,
+}: {
+  server: string
+  onOpenTool: (tool: string | null) => void
+  onToolsChanged?: () => void
+}) {
+  const list = useToolList(server, onToolsChanged)
+  const error = list.loadError ?? list.switchError
 
   return (
     <section className="panel">
@@ -285,9 +283,13 @@ function Tools({ server, onOpenTool }: { server: string; onOpenTool: (tool: stri
           New tool
         </button>
       </h2>
-      {error && <p className="alert">{error}</p>}
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
       <ul className="list">
-        {tools?.map((t) => (
+        {list.tools?.map((t) => (
           <li key={t.name} className="tool">
             <div className="t">
               <div>
@@ -307,11 +309,7 @@ function Tools({ server, onOpenTool }: { server: string; onOpenTool: (tool: stri
                 <span className="method">{t.method}</span> {t.path}
               </div>
             </div>
-            {/* The switches are read-only until the Tools page exists (milestone 8). */}
-            <label className="toggle" title="The Tools page will turn tools on and off">
-              <input type="checkbox" checked={t.enabled} disabled readOnly aria-label={`${t.name} is ${t.enabled ? 'on' : 'off'}`} />
-              <span />
-            </label>
+            <ToolSwitch tool={t} list={list} />
           </li>
         ))}
       </ul>

@@ -32,6 +32,14 @@ import type { ToolView } from './types/ToolView'
 type Schema = Record<string, unknown>
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE']
+/** The same rules as `valid_input_name` and `is_secret_header` in `crates/server/src/tools.rs`. */
+const validInputName = (name: string) => /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(name) && name !== '__proto__'
+const isSecretHeader = (name: string) => /key|token|secret|auth|cookie/i.test(name.trim())
+const inputNameMessage = (name: string) =>
+  `The input name "${name}" must start with a letter or _ and have 1 to 64 letters, digits, _ or -.`
+const SECRET_HEADER_MESSAGE = 'Put credentials in the API auth, not in a fixed header.'
+const isInputValue = (value: string) => /^\{[^{}]*\}$/.test(value)
+
 const INPUT_TYPES: InputType[] = ['string', 'number', 'integer', 'boolean', 'string_array', 'complex']
 const AUTH_TYPES = ['none', 'api_key', 'bearer'] as const
 type AuthType = (typeof AUTH_TYPES)[number]
@@ -248,6 +256,9 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
   }
   const queryCheck = parseQueryTemplate(query)
   const queryError = queryCheck instanceof Error ? queryCheck.message : null
+  const badName = isSpec ? undefined : filledRows.find((r) => !validInputName(r.name))
+  const secretHeader = isSpec ? undefined : headers.find((h) => isSecretHeader(h.name) && !isInputValue(h.value))
+  const pathNames = pathPlaceholders(path)
   const placeholders = pathPlaceholders(path).filter((p) => !filledRows.some((r) => r.name === p))
 
   const schema = isSpec && initial ? specSchema(initial.preview, filledRows) : schemaFromRows(filledRows, body)
@@ -317,6 +328,8 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
   const save = () =>
     run(async () => {
       if (bodyError || queryError) throw new Error(bodyError ?? queryError ?? '')
+      if (badName) throw new Error(inputNameMessage(badName.name))
+      if (secretHeader) throw new Error(SECRET_HEADER_MESSAGE)
       if (onboarding || server === null) {
         const created = await createServerWithTool({ server: serverName.trim(), api: newApi(), draft: buildDraft() })
         onSaved({ kind: 'server', server: created })
@@ -358,7 +371,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       let testApi: TestApi
       if (apiId === null) testApi = { kind: 'draft', base_url: baseUrl.trim(), auth: authInput(auth) }
       else testApi = { kind: 'saved', id: apiId, auth: apiIsSpec || !apiDirty ? undefined : authInput(auth) }
-      const request = { draft: buildDraft(), api: testApi, args }
+      const request = { draft: buildDraft(), api: testApi, args, spec_tool: isSpec && initial ? initial.draft.name : undefined }
       setResult(server === null ? await testDraftTool(request) : await testTool(server, request))
     })
 
@@ -462,6 +475,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
               </button>
             )}
             {isSpec && headers.length === 0 && <span className="muted">none</span>}
+            {secretHeader && <small className="bad">{SECRET_HEADER_MESSAGE}</small>}
           </Row>
 
           <Row label="body">
@@ -531,6 +545,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                 <tbody>
                   {rows.map((r, i) => {
                     const fixed = isSpec && r.input_type === 'complex'
+                    const inPath = isSpec && pathNames.includes(r.name)
                     return (
                       <tr key={i}>
                         <td>
@@ -544,7 +559,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                           </select>
                         </td>
                         <td>
-                          <input type="checkbox" checked={r.required} onChange={(e) => patchRow(i, { required: e.target.checked })} disabled={fixed} aria-label="Required" />
+                          <input type="checkbox" checked={r.required} onChange={(e) => patchRow(i, { required: e.target.checked })} disabled={fixed || inPath} aria-label="Required" />
                         </td>
                         <td>
                           <input value={r.description} onChange={(e) => patchRow(i, { description: e.target.value })} readOnly={fixed} aria-label="Input description" />
@@ -562,6 +577,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                 </tbody>
               </table>
             </div>
+            {badName && <small className="bad">{inputNameMessage(badName.name)}</small>}
             {!isSpec && (
               <button className="btn add" type="button" onClick={() => setRows([...rows, { name: '', input_type: 'string', required: true, description: '' }])}>
                 Add input

@@ -2613,6 +2613,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "ts-rs",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-// App shell: side menu, header, theme switcher, and a small router for the pages.
+// App shell: side menu with the theme picker, header, and a small router for the pages.
 
 import { useCallback, useEffect, useState } from 'react'
 import { getServers, setTheme, signOut, type Theme, type User } from './api'
@@ -24,9 +24,9 @@ const PAGES: Page[] = [
 ]
 
 const THEMES: { id: Theme; label: string }[] = [
-  { id: 'neon', label: 'Neon terminal' },
-  { id: 'calm', label: 'Calm dark' },
-  { id: 'light', label: 'Clean light' },
+  { id: 'neon', label: 'Neon' },
+  { id: 'calm', label: 'Calm' },
+  { id: 'light', label: 'Light' },
 ]
 
 /** The browser remembers the last server. It is a convenience only, so errors are ignored. */
@@ -200,20 +200,6 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
 
   return (
     <>
-      <div className="switcher">
-        <div className="skins" role="group" aria-label="Theme">
-          {THEMES.map((t) => (
-            <button key={t.id} type="button" aria-pressed={user.theme === t.id} onClick={() => changeTheme(t.id)}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-        {themeError && (
-          <p className="alert" role="alert">
-            {themeError}
-          </p>
-        )}
-      </div>
       <div className="app">
         <nav className="side" aria-label="Main">
           <Brand />
@@ -264,6 +250,23 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
               </ul>
             </div>
           )}
+          <div className="theme-pick">
+            <label>
+              Theme{' '}
+              <select value={user.theme} onChange={(e) => changeTheme(e.target.value as Theme)}>
+                {THEMES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {themeError && (
+              <p className="alert" role="alert">
+                {themeError}
+              </p>
+            )}
+          </div>
           <div className="user">
             {user.avatar_url ? (
               <img className="avatar" src={user.avatar_url} alt="" />

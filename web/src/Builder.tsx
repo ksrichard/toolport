@@ -746,6 +746,8 @@ export function Builder({ server, tool, navigate, onChanged }: BuilderProps) {
     }
   }, [server, tool])
 
+  const [back] = useState(() => (window.history.state?.from === '/tools' ? '/tools' : '/'))
+
   const saved = (result: Saved) => {
     if (result.kind !== 'tool') return
     onChanged()
@@ -761,13 +763,13 @@ export function Builder({ server, tool, navigate, onChanged }: BuilderProps) {
           <h1>{tool ?? 'New tool'}</h1>
           <div className="sub">
             <a
-              href="/"
+              href={back}
               onClick={(e) => {
                 e.preventDefault()
-                navigate('/')
+                navigate(back)
               }}
             >
-              Back to {server}
+              {back === '/tools' ? 'Back to Tools' : `Back to ${server}`}
             </a>
           </div>
         </div>
@@ -784,7 +786,7 @@ export function Builder({ server, tool, navigate, onChanged }: BuilderProps) {
           onSaved={saved}
           onDeleted={() => {
             onChanged()
-            navigate('/')
+            navigate(back)
           }}
         />
       ) : null}

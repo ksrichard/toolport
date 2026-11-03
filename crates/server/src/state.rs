@@ -10,6 +10,7 @@ use crate::{
     live::LiveHub,
     mcp::{self, McpService, ToolportMcp},
     secrets::SecretsKey,
+    sessions::SessionPeers,
     upstream_guard,
 };
 
@@ -24,6 +25,8 @@ pub struct AppState {
     pub mcp: McpService,
     pub live: Arc<LiveHub>,
     pub secrets: Arc<SecretsKey>,
+    pub peers: Arc<SessionPeers>,
+    pub upstream_timeout: Duration,
 }
 
 pub struct AuthSettings {
@@ -58,13 +61,16 @@ impl AppState {
         let secrets =
             Arc::new(SecretsKey::from_hex(&config.secrets_key).map_err(StartupError::SecretsKey)?);
         let live = Arc::new(LiveHub::default());
+        let peers = Arc::new(SessionPeers::default());
+        let upstream_timeout = Duration::from_millis(config.upstream_timeout_ms);
         let handler = ToolportMcp::new(
             pool.clone(),
             upstream.clone(),
             secrets.clone(),
             config.allow_local_upstream,
-            Duration::from_millis(config.upstream_timeout_ms),
+            upstream_timeout,
             live.clone(),
+            peers.clone(),
         );
         Ok(Self {
             live,
@@ -75,6 +81,8 @@ impl AppState {
             allow_local_upstream: config.allow_local_upstream,
             http,
             secrets,
+            peers,
+            upstream_timeout,
         })
     }
 }

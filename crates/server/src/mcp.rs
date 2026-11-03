@@ -30,6 +30,7 @@ use crate::{
     live::{CallEvent, LiveHub},
     mcp_tokens::{self, AuthorizeError, McpCaller},
     secrets::{SecretsError, SecretsKey},
+    sessions::SessionPeers,
     state::AppState,
     upstream::{self, ApiTarget, CallOutput, DraftSecret, UpstreamAuth, UpstreamCtx},
     upstream_guard::BlockedAddress,
@@ -90,6 +91,7 @@ pub struct ToolportMcp {
     allow_local_upstream: bool,
     upstream_timeout: Duration,
     live: Arc<LiveHub>,
+    peers: Arc<SessionPeers>,
 }
 
 /// Errors that stop a tool call before ToolPort sends the upstream request.
@@ -144,6 +146,7 @@ impl ToolportMcp {
         allow_local_upstream: bool,
         upstream_timeout: Duration,
         live: Arc<LiveHub>,
+        peers: Arc<SessionPeers>,
     ) -> Self {
         Self {
             pool,
@@ -152,6 +155,20 @@ impl ToolportMcp {
             allow_local_upstream,
             upstream_timeout,
             live,
+            peers,
+        }
+    }
+
+    /// Remembers the session, so a tool change can notify it later.
+    fn register_peer(&self, caller: &McpCaller, context: &RequestContext<RoleServer>) {
+        let session = context
+            .extensions
+            .get::<Parts>()
+            .and_then(|parts| parts.headers.get("mcp-session-id"))
+            .and_then(|value| value.to_str().ok());
+        if let Some(session) = session {
+            self.peers
+                .register(caller.server_id, session.to_owned(), context.peer.clone());
         }
     }
 
@@ -246,8 +263,13 @@ impl ToolportMcp {
 
 impl ServerHandler for ToolportMcp {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("toolport", env!("CARGO_PKG_VERSION")))
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+        .with_server_info(Implementation::new("toolport", env!("CARGO_PKG_VERSION")))
     }
 
     async fn list_tools(
@@ -256,6 +278,7 @@ impl ServerHandler for ToolportMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let caller = mcp_caller(&context)?;
+        self.register_peer(&caller, &context);
         self.live.seen(&caller, client_name(&context).as_deref());
         Ok(ListToolsResult::with_all_items(self.tools(&caller).await?))
     }
@@ -266,6 +289,7 @@ impl ServerHandler for ToolportMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let caller = mcp_caller(&context)?;
+        self.register_peer(&caller, &context);
         let client = client_name(&context);
         self.live.seen(&caller, client.as_deref());
         let args = request.arguments.unwrap_or_default();

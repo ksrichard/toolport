@@ -819,3 +819,37 @@ async fn blocked_base_url_gives_a_tool_error(pool: PgPool) {
         .unwrap();
     assert_eq!(saved, "upstream_error");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn list_changed_reaches_an_open_session(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    // The session is known to the server after its first tools request.
+    client.tool_names().await;
+
+    let request = Request::get(&client.path)
+        .header(header::HOST, HOST)
+        .header(header::ACCEPT, "text/event-stream")
+        .header(header::AUTHORIZATION, format!("Bearer {}", client.token))
+        .header(SESSION_HEADER, &client.session)
+        .body(Body::empty())
+        .unwrap();
+    let mut stream = app.clone().oneshot(request).await.unwrap().into_body();
+    let server_id: i64 = sqlx::query_scalar("SELECT id FROM servers WHERE name = 'pets'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    state.peers.notify_tools_changed(server_id).await;
+
+    let mut seen = String::new();
+    while !seen.contains("notifications/tools/list_changed") {
+        let frame = tokio::time::timeout(Duration::from_secs(5), stream.frame())
+            .await
+            .expect("no event in 5 s")
+            .expect("stream ended")
+            .unwrap();
+        if let Some(data) = frame.data_ref() {
+            seen.push_str(&String::from_utf8_lossy(data));
+        }
+    }
+}

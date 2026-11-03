@@ -11,7 +11,8 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    auth::github::GithubError, import::ImportError, mcp_tokens::TokenError, secrets::SecretsError,
+    auth::github::GithubError, import::ImportError, mcp::CallError, mcp_tokens::TokenError,
+    secrets::SecretsError, tools::DraftError,
 };
 
 /// Errors that stop the server before or while it serves requests.
@@ -72,6 +73,24 @@ pub enum ApiError {
     Import(#[from] ImportError),
     #[error("{0}")]
     Token(#[from] TokenError),
+    #[error("{0}")]
+    Draft(#[from] DraftError),
+    #[error("the API name must not be empty")]
+    InvalidApiName,
+    #[error("the API name {0} is already in use")]
+    ApiNameTaken(String),
+    #[error("the auth header name is not valid")]
+    InvalidAuthHeader,
+    #[error("this auth type needs a secret")]
+    MissingSecret,
+    #[error("the name of an API that comes from a spec cannot change")]
+    SpecApiFixed,
+    #[error("the test call is not valid: {0}")]
+    TestCall(CallError),
+    #[error("an internal error happened")]
+    Secrets(#[from] SecretsError),
+    #[error("an internal error happened")]
+    StoredAuth,
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -88,9 +107,23 @@ impl ApiError {
             Self::InvalidBody(_) => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::DatabaseUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Database(_) | Self::TokenSigning(_) | Self::Encode(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            Self::Database(_)
+            | Self::TokenSigning(_)
+            | Self::Encode(_)
+            | Self::Secrets(_)
+            | Self::StoredAuth => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::TestCall(error) => match error {
+                CallError::Argument(_) | CallError::InvalidHeader(_) | CallError::BaseUrl(_) => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            Self::Draft(_)
+            | Self::InvalidApiName
+            | Self::InvalidAuthHeader
+            | Self::MissingSecret
+            | Self::SpecApiFixed => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::ApiNameTaken(_) => StatusCode::CONFLICT,
             Self::InvalidServerName
             | Self::InvalidSpecUrl
             | Self::SpecNotText
@@ -121,7 +154,23 @@ impl ApiError {
             Self::InvalidBody(_) => "invalid_body",
             Self::NotFound => "not_found",
             Self::DatabaseUnavailable(_) => "database_unavailable",
-            Self::Database(_) | Self::TokenSigning(_) | Self::Encode(_) => "internal_error",
+            Self::Database(_)
+            | Self::TokenSigning(_)
+            | Self::Encode(_)
+            | Self::Secrets(_)
+            | Self::StoredAuth => "internal_error",
+            Self::Draft(error) => error.code(),
+            Self::InvalidApiName => "invalid_api_name",
+            Self::ApiNameTaken(_) => "api_name_taken",
+            Self::InvalidAuthHeader => "invalid_auth_header",
+            Self::MissingSecret => "missing_secret",
+            Self::SpecApiFixed => "spec_api_fixed",
+            Self::TestCall(error) => match error {
+                CallError::Argument(_) | CallError::InvalidHeader(_) | CallError::BaseUrl(_) => {
+                    "invalid_test_call"
+                }
+                _ => "internal_error",
+            },
             Self::InvalidServerName => "invalid_server_name",
             Self::ServerNameTaken(_) => "server_name_taken",
             Self::InvalidSpecUrl => "invalid_spec_url",

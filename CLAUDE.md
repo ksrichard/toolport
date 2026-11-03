@@ -22,7 +22,12 @@ use the same shell, panels, and tokens.
   - `clap` (derive + env): the server settings. Each setting is a flag and an env var.
 - MCP: `rmcp` (official Rust MCP SDK), Streamable HTTP transport, mounted in axum.
 - OpenAPI parsing: `openapiv3` (3.0) with serde. Reject 2.0 (Swagger) specs with a clear error.
-- Upstream HTTP calls and GitHub calls: `reqwest` (rustls).
+- Upstream HTTP calls and GitHub calls: `reqwest` (rustls). The upstream client refuses private,
+  loopback, link-local, and other non-public addresses. This covers DNS answers, IP-literal URLs,
+  and redirects. It ignores `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` on purpose, because a
+  proxy would skip the address check.
+- Upstream secrets at rest: `aes-gcm` (AES-256-GCM) encrypts them. `zeroize` wipes decrypted
+  secrets from memory.
 - Database: PostgreSQL through `sqlx` with migrations. Local dev runs Postgres in Docker Compose.
 - Auth helpers: `jsonwebtoken` (JWT), `axum-extra` + `cookie` (the refresh cookie),
   `rand` (random tokens), `sha2` (token hashes).
@@ -34,6 +39,8 @@ use the same shell, panels, and tokens.
 - Logs: `tracing` with JSON output.
 - Frontend: React + Vite + TypeScript. Plain CSS with the mockup's CSS variables. No UI kit.
 - Shared types: `ts-rs` generates TypeScript types from the Rust API types.
+  The preview rules have a shared fixture, `crates/core/tests/fixtures/preview.json`. A Rust test
+  and `npm run check:preview` both check it.
 - Live updates to the dashboard: Server-Sent Events (SSE).
 
 ## Repo layout
@@ -99,9 +106,11 @@ Caddy routes (`docker/Caddyfile`):
 
 Config:
 - All secrets come from `.env` (not committed): `DATABASE_URL`, `JWT_SECRET`,
-  `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOOLPORT_DOMAIN`, `POSTGRES_PASSWORD`, `PUBLIC_URL`.
+  `SECRETS_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOOLPORT_DOMAIN`, `POSTGRES_PASSWORD`, `PUBLIC_URL`.
 - Compose sets the server's `PUBLIC_URL` to `https://$TOOLPORT_DOMAIN`. The `PUBLIC_URL` in
   `.env` is for host runs only.
+- `ALLOW_LOCAL_UPSTREAM` (default false) allows upstream calls to loopback addresses only. Use it
+  for local dev and tests.
 - `.env.example` lists every variable. CI checks that the Compose file is valid
   (`docker compose config`).
 
@@ -147,7 +156,8 @@ Each milestone ends with working code, tests, and a short demo.
    tool call into an HTTP request to the upstream API and return the response. Add a
    timeout (10 s default). Check it with MCP Inspector.
    Status: done. Until the APIs and servers pages exist, the `import-spec` binary loads a spec
-   into a server. A re-import of an API replaces its tools and turns them all on again.
+   into a server. A re-import of an API matches tools by method and path.
+   It keeps edited tools and the `enabled` flag, and removes tools whose operation is gone.
 4. Tokens. Make MCP clients send a JWT as a bearer token. Check the signature, the expiry,
    and the `jti` row. Show the token value once, at creation. Allow revoke.
    Status: done. Until the Tokens page exists, the `mcp-token` binary creates, lists, and
@@ -168,14 +178,22 @@ Each milestone ends with working code, tests, and a short demo.
    (`crates/server/templates/`) or an own spec, name the server, copy the client command.
    The tool switches stay read-only until milestone 8. `cargo test` writes the API types to
    `web/src/types/` (ts-rs), and CI fails when they are out of date.
+   Tool builder. Status: done. Pages: `/servers/<name>/tools/new` and
+   `/servers/<name>/tools/<tool>`. The builder edits hand-made, template, and imported tools.
+   The preview is the exact `tools/list` JSON. Test shows the MCP result and the raw HTTP, with
+   secrets masked as `••••`. It uses `POST /api/servers/{name}/tool-test`, or `POST /api/tool-test`
+   for a draft API in onboarding. Onboarding has "Build a tool by hand" and the
+   WAITING/CONNECTED badge. Saving a tool sends `notifications/tools/list_changed`.
 8. Tools page. List all tools with on/off switches. When a tool changes, send
    `notifications/tools/list_changed` to the open MCP sessions. Keep at least one tool on.
 9. APIs page. Add an API from a spec URL or a file. Set the base URL and the upstream auth
    (none, API key header, or bearer). Re-import a spec and show which tools were added or removed.
+   Status: the upstream auth part is done. The APIs page is not.
 10. Tokens page. Create, name, and revoke tokens. Show the last use of each token.
 11. All servers page. Create, rename, and delete servers. Show a short status for each.
 12. Hardening. Encrypt upstream secrets at rest. Add rate limits per token. Delete old call
     rows after a set time.
+    Status: the encryption of upstream secrets is done. Rate limits and call-row cleanup are not.
 13. Deploy. Run the same `compose.yaml` on one host with a real `TOOLPORT_DOMAIN`.
     Add a Postgres backup job. Ask before any change to real infrastructure.
 
@@ -192,7 +210,7 @@ Each milestone ends with working code, tests, and a short demo.
 
 ## Commands
 - First time: `cp .env.example .env`. Set `POSTGRES_PASSWORD` and the same password in
-  `DATABASE_URL`. Set `JWT_SECRET` (`openssl rand -hex 32`) and the GitHub OAuth app values.
+  `DATABASE_URL`. Set `JWT_SECRET` and `SECRETS_KEY` (both `openssl rand -hex 32`; `SECRETS_KEY` must be 64 hex characters) and the GitHub OAuth app values.
 - Whole system: `docker compose up --build`, then open `https://localhost`.
   Your browser warns about the local Caddy certificate the first time.
 - Database only: `docker compose up -d --wait postgres`
@@ -205,5 +223,5 @@ Each milestone ends with working code, tests, and a short demo.
 - Checks: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
   (the tests need Postgres and `DATABASE_URL`)
 - Frontend: `cd web && npm run dev` (Vite sends `/api`, `/auth`, `/mcp` to `localhost:8080`),
-  `npm run lint`, `npm run build`
+  `npm run lint`, `npm run build`, `npm run check:preview`
 - CI: `.github/workflows/ci.yml` runs all the checks above, `docker compose config`, and both image builds.

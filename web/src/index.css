@@ -236,12 +236,15 @@ tr.new td { animation: flash 1.2s ease-out; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .snippet { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px; }
 .snippet pre { margin: 0; font: 12px/1.6 var(--f-data); white-space: pre-wrap; word-break: break-all; }
-.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.checks li { display: flex; gap: 10px; align-items: center; }
-.checks li::before { content: ""; width: 10px; height: 10px; flex: none; border-radius: 50%; }
-.checks li.waiting { color: var(--muted); }
-.checks li.waiting::before { border: 2px solid var(--warn); animation: pulse 2s infinite; }
-.checks li.done::before { background: var(--ok); }
+.badge-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.badge-card h2 { margin: 0; font-size: 1.2rem; }
+.badge-card p { margin: 0; }
+.badge-card.connected { border-color: var(--accent); box-shadow: 0 0 24px -12px var(--accent); }
+.badge-state { display: flex; align-items: center; gap: 8px; font: 12px var(--f-data); letter-spacing: .08em; color: var(--muted); }
+.badge-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.connected .badge-state { color: var(--accent); }
+.connected .badge-dot { background: var(--accent); }
+.badge-detail { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; color: var(--accent); font-size: 13px; }
 
 @media (max-width: 1080px) { .grid2 { grid-template-columns: 1fr; } }
 @media (max-width: 820px) {

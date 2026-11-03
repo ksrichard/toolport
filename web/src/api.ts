@@ -144,5 +144,8 @@ export const deleteTool = (name: string, tool: string) => api<void>(toolPath(nam
 export const testTool = (name: string, body: TestRequest) =>
   api<TestResult>(`${server(name)}/tool-test`, json('POST', body))
 
+/** The test for a user without a server yet. The API in the body must be a draft. */
+export const testDraftTool = (body: TestRequest) => api<TestResult>('/api/tool-test', json('POST', body))
+
 export const createServerWithTool = (body: CreateServerWithTool) =>
   api<ServerSummary>('/api/servers/with-tool', json('POST', body))

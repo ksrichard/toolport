@@ -166,6 +166,7 @@ pub fn routes() -> Router<AppState> {
         .route("/servers/{name}/apis/manual", post(create_api))
         .route("/servers/{name}/apis/{id}", put(update_api))
         .route("/servers/{name}/tool-test", post(test_tool))
+        .route("/tool-test", post(test_draft_tool))
         .route("/servers/{name}/tools", post(create_tool))
         .route(
             "/servers/{name}/tools/{tool}",
@@ -526,6 +527,27 @@ async fn test_tool(
     ApiJson(body): ApiJson<TestRequest>,
 ) -> Result<Json<TestResult>, ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    run_test(&state, Some(server_id), body).await.map(Json)
+}
+
+/// The test for a user without a server yet (the onboarding wizard). The API must be a draft,
+/// because there is no saved API to read.
+async fn test_draft_tool(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    ApiJson(body): ApiJson<TestRequest>,
+) -> Result<Json<TestResult>, ApiError> {
+    if matches!(body.api, TestApi::Saved { .. }) {
+        return Err(ApiError::TestNeedsDraft);
+    }
+    run_test(&state, None, body).await.map(Json)
+}
+
+async fn run_test(
+    state: &AppState,
+    server_id: Option<i64>,
+    body: TestRequest,
+) -> Result<TestResult, ApiError> {
     let tool = draft_to_tool(&body.draft)?;
 
     let (target, new_secret) = match body.api {
@@ -547,7 +569,7 @@ async fn test_tool(
                      WHERE id = $1 AND server_id = $2",
             )
             .bind(id)
-            .bind(server_id)
+            .bind(server_id.ok_or(ApiError::NotFound)?)
             .fetch_optional(&state.pool)
             .await
             .map_err(ApiError::Database)?
@@ -583,10 +605,10 @@ async fn test_tool(
         .await
         .map_err(ApiError::TestCall)?;
     let mcp = serde_json::to_value(&output.result).map_err(|_| ApiError::StoredAuth)?;
-    Ok(Json(TestResult {
+    Ok(TestResult {
         mcp,
         http: output.trace,
-    }))
+    })
 }
 
 fn target_of(

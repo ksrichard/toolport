@@ -6,6 +6,7 @@ import { ApiError, openStream } from './api'
 import type { Bucket } from './types/Bucket'
 import type { CallRecord } from './types/CallRecord'
 import type { ConnectedClient } from './types/ConnectedClient'
+import type { FirstRequest } from './types/FirstRequest'
 import type { Metrics } from './types/Metrics'
 import type { MetricsUpdate } from './types/MetricsUpdate'
 import type { Snapshot } from './types/Snapshot'
@@ -28,6 +29,8 @@ export interface LiveState {
   calls: CallRecord[]
   /** Ids of calls that arrived after the snapshot. The call log highlights them. */
   fresh: Set<number>
+  /** The first request of the first new client since the stream opened. */
+  firstRequest: FirstRequest | null
 }
 
 type Action =
@@ -35,6 +38,7 @@ type Action =
   | { type: 'snapshot'; data: Snapshot }
   | { type: 'call'; data: CallRecord }
   | { type: 'metrics'; data: MetricsUpdate }
+  | { type: 'client'; data: FirstRequest }
 
 const initial: LiveState = {
   status: 'connecting',
@@ -44,6 +48,7 @@ const initial: LiveState = {
   buckets: new Map(),
   calls: [],
   fresh: new Set(),
+  firstRequest: null,
 }
 
 function bucketsFrom(list: Bucket[]): LiveState['buckets'] {
@@ -85,6 +90,8 @@ function reduce(state: LiveState, action: Action): LiveState {
     }
     case 'metrics':
       return { ...state, metrics: action.data.metrics, clients: action.data.clients }
+    case 'client':
+      return state.firstRequest ? state : { ...state, firstRequest: action.data }
   }
 }
 
@@ -134,6 +141,7 @@ export function useLiveStream(server: string, paused: boolean): LiveState {
           if (event === 'snapshot') dispatch({ type: 'snapshot', data: parsed })
           else if (event === 'call') dispatch({ type: 'call', data: parsed })
           else if (event === 'metrics') dispatch({ type: 'metrics', data: parsed })
+          else if (event === 'client') dispatch({ type: 'client', data: parsed })
         }
         throw new Error('the server closed the stream')
       } catch (error) {

@@ -1096,3 +1096,30 @@ async fn reimport_ignores_the_spec_name_of_an_edited_tool(pool: PgPool) {
     let report = reimport(&app, PETSTORE).await;
     assert_eq!(report.kept, vec!["pet".to_owned()]);
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn user_test_route_runs_a_draft_without_a_server(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let api = json!({
+        "kind": "draft", "base_url": fake_upstream().await,
+        "auth": { "type": "bearer", "secret": SECRET },
+    });
+    let (status, text) = app
+        .text("POST", "/api/tool-test", test_body("latitude={lat}", api))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(!text.contains(SECRET));
+    let result: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(result["mcp"]["isError"], false);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn user_test_route_rejects_a_saved_api(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    let api = json!({ "kind": "saved", "id": 1 });
+    let (status, error) = app
+        .json("POST", "/api/tool-test", test_body("latitude={lat}", api))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "invalid_test_call");
+}

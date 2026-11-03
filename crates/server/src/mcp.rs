@@ -27,7 +27,7 @@ use crate::{
     auth::bearer_token,
     calls::{self, NewCall},
     error::{ApiError, error_chain},
-    live::{CallEvent, LiveHub},
+    live::{CallEvent, FirstRequest, LiveHub},
     mcp_tokens::{self, AuthorizeError, McpCaller},
     secrets::{SecretsError, SecretsKey},
     sessions::SessionPeers,
@@ -261,6 +261,25 @@ impl ToolportMcp {
     }
 }
 
+impl ToolportMcp {
+    /// Tells the Live page of this server that a new client sent its first request.
+    fn announce(
+        &self,
+        caller: &McpCaller,
+        client_name: Option<String>,
+        method: &str,
+        tools_sent: Option<u32>,
+    ) {
+        let first = FirstRequest {
+            client_name,
+            token_name: caller.token_name.clone(),
+            method: method.to_owned(),
+            tools_sent,
+        };
+        self.live.publish_client(caller.server_id, first);
+    }
+}
+
 impl ServerHandler for ToolportMcp {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(
@@ -279,8 +298,14 @@ impl ServerHandler for ToolportMcp {
     ) -> Result<ListToolsResult, McpError> {
         let caller = mcp_caller(&context)?;
         self.register_peer(&caller, &context);
-        self.live.seen(&caller, client_name(&context).as_deref());
-        Ok(ListToolsResult::with_all_items(self.tools(&caller).await?))
+        let client = client_name(&context);
+        let is_new = self.live.seen(&caller, client.as_deref());
+        let tools = self.tools(&caller).await?;
+        if is_new {
+            let count = u32::try_from(tools.len()).ok();
+            self.announce(&caller, client, "tools/list", count);
+        }
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
@@ -291,7 +316,9 @@ impl ServerHandler for ToolportMcp {
         let caller = mcp_caller(&context)?;
         self.register_peer(&caller, &context);
         let client = client_name(&context);
-        self.live.seen(&caller, client.as_deref());
+        if self.live.seen(&caller, client.as_deref()) {
+            self.announce(&caller, client.clone(), "tools/call", None);
+        }
         let args = request.arguments.unwrap_or_default();
         let result = self
             .call(&caller, client.as_deref(), &request.name, &args)

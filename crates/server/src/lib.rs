@@ -10,6 +10,7 @@ pub mod secrets;
 pub mod servers;
 pub mod state;
 pub mod templates;
+pub mod upstream;
 pub mod upstream_guard;
 pub mod users;
 

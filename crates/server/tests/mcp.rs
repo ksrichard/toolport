@@ -17,6 +17,7 @@ use server::{
     calls::{self, CallResult},
     import::{ImportRequest, Owner, import_spec},
     mcp_tokens,
+    secrets::{SecretsKey, seal},
     state::AppState,
 };
 use sqlx::PgPool;
@@ -106,10 +107,15 @@ async fn import(pool: &PgPool, server: &str, spec: &str, base_url: Url) {
 
 /// A user, the server `pets` with the fake upstream API, and the app.
 async fn setup(pool: PgPool, timeout_ms: u64) -> (Router, AppState) {
+    setup_with(pool, timeout_ms, true).await
+}
+
+async fn setup_with(pool: PgPool, timeout_ms: u64, allow_local: bool) -> (Router, AppState) {
     common::create_user(&pool, 1, "octocat").await;
     import(&pool, "pets", UPSTREAM_SPEC, fake_upstream().await).await;
     let mut config = common::config(&common::fake_github().await);
     config.upstream_timeout_ms = timeout_ms;
+    config.allow_local_upstream = allow_local;
     let state = AppState::new(pool, &config).unwrap();
     (server::app(state.clone()), state)
 }
@@ -730,4 +736,81 @@ async fn live_stream_needs_the_owner(pool: PgPool) {
     let access = state.auth.jwt.issue_access(other_user).unwrap();
     let response = open_live(&app, "pets", Some(&access)).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+const ECHO_SPEC: &str = r#"{
+  "openapi": "3.0.3",
+  "info": { "title": "Echo", "version": "1" },
+  "paths": { "/whoami": { "get": { "operationId": "whoami", "responses": {} } } }
+}"#;
+
+/// A fake upstream that returns the two auth headers it got.
+async fn echo_upstream() -> Url {
+    let app = Router::new().route(
+        "/v1/whoami",
+        get(|headers: HeaderMap| async move {
+            let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+            Json(json!({ "authorization": get("authorization"), "x_api_key": get("x-api-key") }))
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    Url::parse(&format!("http://{addr}/v1")).unwrap()
+}
+
+/// Adds the server `echo` and seals `secret` into its API with the given auth settings.
+async fn echo_with_auth(state: &AppState, auth_type: &str, header: Option<&str>, secret: &str) {
+    import(&state.pool, "echo", ECHO_SPEC, echo_upstream().await).await;
+    let (api_id,): (i64,) = sqlx::query_as(
+        "SELECT a.id FROM apis a JOIN servers s ON s.id = a.server_id WHERE s.name = 'echo'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    let key = SecretsKey::from_hex(&"0".repeat(64)).unwrap();
+    let sealed = seal(&key, api_id, secret).unwrap();
+    sqlx::query("UPDATE apis SET auth_type = $1, auth_header = $2, auth_secret = $3 WHERE id = $4")
+        .bind(auth_type)
+        .bind(header)
+        .bind(sealed)
+        .bind(api_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn bearer_auth_reaches_upstream(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    echo_with_auth(&state, "bearer", None, "t0ken").await;
+    let client = Client::connect(&app, &state, "echo").await;
+    let result = client.call("whoami", json!({})).await;
+    let answer: Value = serde_json::from_str(text(&result)).unwrap();
+    assert_eq!(answer["authorization"], "Bearer t0ken");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn api_key_auth_reaches_upstream(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    echo_with_auth(&state, "api_key", Some("X-Api-Key"), "k3y").await;
+    let client = Client::connect(&app, &state, "echo").await;
+    let result = client.call("whoami", json!({})).await;
+    let answer: Value = serde_json::from_str(text(&result)).unwrap();
+    assert_eq!(answer["x_api_key"], "k3y");
+    assert_eq!(answer["authorization"], Value::Null);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn blocked_base_url_gives_a_tool_error(pool: PgPool) {
+    let (app, state) = setup_with(pool, 10_000, false).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    let result = client.call("slow", json!({})).await;
+    assert_eq!(result["isError"], true);
+    assert_eq!(text(&result), "the upstream address is not allowed");
+    let (saved,): (String,) = sqlx::query_as("SELECT result FROM calls")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(saved, "upstream_error");
 }

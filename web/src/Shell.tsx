@@ -64,7 +64,10 @@ function usePath(): [string, (path: string) => void] {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
   const navigate = useCallback((next: string) => {
-    window.history.pushState(null, '', next)
+    // The builder reads `from` for its back link. A move between builder pages keeps the first page.
+    const current = window.location.pathname
+    const from = current.startsWith('/servers/') ? (window.history.state?.from ?? '/') : current
+    window.history.pushState({ from }, '', next)
     setPath(next)
   }, [])
   return [path, navigate]

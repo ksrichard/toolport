@@ -6,6 +6,7 @@ import { Brand } from './Brand'
 import { Builder } from './Builder'
 import { Live } from './Live'
 import { Onboarding } from './Onboarding'
+import { Tools } from './Tools'
 import type { ServerSummary } from './types/ServerSummary'
 
 interface Page {
@@ -18,7 +19,7 @@ interface Page {
 const PAGES: Page[] = [
   { path: '/', label: 'Live', milestone: 7, summary: '' },
   { path: '/apis', label: 'APIs', milestone: 9, summary: 'Import OpenAPI specs and set the upstream base URL and auth.' },
-  { path: '/tools', label: 'Tools', milestone: 8, summary: 'Turn single tools on or off. Agents do not see tools that are off.' },
+  { path: '/tools', label: 'Tools', milestone: 8, summary: '' },
   { path: '/tokens', label: 'Tokens', milestone: 10, summary: 'Create and revoke the tokens that MCP clients use to connect.' },
   { path: '/servers', label: 'All servers', milestone: 11, summary: 'Create, rename, and delete your MCP servers.' },
 ]
@@ -169,10 +170,13 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
         navigate={navigate}
         onChanged={reloadServers}
       />
-    ) : page.path === '/' ? (
+    ) : page.path === '/tools' ? (
+        <Tools key={selected.name} server={selected.name} navigate={navigate} onChanged={reloadServers} />
+      ) : page.path === '/' ? (
         <Live
           key={selected.name}
           server={selected}
+          onToolsChanged={reloadServers}
           onConnectClient={() => navigate('/connect')}
           onOpenTool={(tool) =>
             navigate(`/servers/${encodeURIComponent(selected.name)}/tools/${encodeURIComponent(tool ?? 'new')}`)

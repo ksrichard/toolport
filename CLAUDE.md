@@ -186,6 +186,8 @@ Each milestone ends with working code, tests, and a short demo.
    WAITING/CONNECTED badge. Saving a tool sends `notifications/tools/list_changed`.
 8. Tools page. List all tools with on/off switches. When a tool changes, send
    `notifications/tools/list_changed` to the open MCP sessions. Keep at least one tool on.
+   Status: done. `PUT /api/servers/{name}/tools/{tool}/enabled` turns a tool on or off. The Live
+   page and the Tools page use the same switch, and the server refuses to turn off the last tool.
 9. APIs page. Add an API from a spec URL or a file. Set the base URL and the upstream auth
    (none, API key header, or bearer). Re-import a spec and show which tools were added or removed.
    Status: the upstream auth part is done. The APIs page is not.

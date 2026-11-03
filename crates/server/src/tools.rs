@@ -184,6 +184,10 @@ pub fn routes() -> Router<AppState> {
             get(get_tool).put(update_tool).delete(delete_tool),
         )
         .route("/servers/{name}/tools/{tool}/reset", post(reset_tool))
+        .route(
+            "/servers/{name}/tools/{tool}/enabled",
+            put(set_tool_enabled),
+        )
         .route("/servers/with-tool", post(create_server_with_tool))
 }
 
@@ -210,6 +214,12 @@ pub struct SaveTool {
     #[ts(type = "number")]
     pub api_id: i64,
     pub draft: ToolDraft,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct SetToolEnabled {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -988,6 +998,49 @@ async fn delete_tool(
         .execute(&mut *tx)
         .await
         .map_err(ApiError::Database)?;
+    tx.commit().await.map_err(ApiError::Database)?;
+    state.peers.notify_tools_changed(server_id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A server must keep at least one tool on, so a client never sees an empty tool list.
+async fn set_tool_enabled(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((name, tool)): Path<(String, String)>,
+    ApiJson(body): ApiJson<SetToolEnabled>,
+) -> Result<StatusCode, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let tool_id: i64 =
+        sqlx::query_scalar("SELECT id FROM tools WHERE server_id = $1 AND name = $2")
+            .bind(server_id)
+            .bind(&tool)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(ApiError::Database)?
+            .ok_or(ApiError::NotFound)?;
+    // The lock keeps two requests from turning off the last two enabled tools together.
+    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    if !body.enabled {
+        let enabled: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM tools WHERE server_id = $1 AND enabled FOR UPDATE")
+                .bind(server_id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(ApiError::Database)?;
+        if enabled == [tool_id] {
+            return Err(ApiError::LastEnabledTool);
+        }
+    }
+    let updated = sqlx::query("UPDATE tools SET enabled = $2 WHERE id = $1")
+        .bind(tool_id)
+        .bind(body.enabled)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::Database)?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
     tx.commit().await.map_err(ApiError::Database)?;
     state.peers.notify_tools_changed(server_id).await;
     Ok(StatusCode::NO_CONTENT)

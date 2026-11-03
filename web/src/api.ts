@@ -9,6 +9,7 @@ import type { NewToken } from './types/NewToken'
 import type { SaveApi } from './types/SaveApi'
 import type { SaveTool } from './types/SaveTool'
 import type { ServerSummary } from './types/ServerSummary'
+import type { SetToolEnabled } from './types/SetToolEnabled'
 import type { Template } from './types/Template'
 import type { Theme } from './types/Theme'
 import type { TestRequest } from './types/TestRequest'
@@ -138,6 +139,9 @@ export const updateTool = (name: string, tool: string, body: SaveTool) =>
 
 export const resetTool = (name: string, tool: string) =>
   api<ToolView>(`${toolPath(name, tool)}/reset`, { method: 'POST' })
+
+export const setToolEnabled = (name: string, tool: string, enabled: boolean) =>
+  api<void>(`${toolPath(name, tool)}/enabled`, json('PUT', { enabled } satisfies SetToolEnabled))
 
 export const deleteTool = (name: string, tool: string) => api<void>(toolPath(name, tool), { method: 'DELETE' })
 

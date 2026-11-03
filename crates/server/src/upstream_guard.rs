@@ -99,6 +99,8 @@ pub fn upstream_client(allow_loopback: bool) -> Result<reqwest::Client, reqwest:
     });
     reqwest::Client::builder()
         .user_agent("toolport")
+        // A proxy resolves names itself, so the guarded resolver would not run.
+        .no_proxy()
         .timeout(Duration::from_secs(10))
         .dns_resolver(Arc::new(GuardedResolver { allow_loopback }))
         .redirect(policy)

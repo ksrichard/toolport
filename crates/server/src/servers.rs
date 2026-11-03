@@ -13,6 +13,7 @@ use sqlx::PgPool;
 use toolport_core::server_name::is_valid_server_name;
 use ts_rs::TS;
 
+use crate::upstream_guard::check_url;
 use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
@@ -285,11 +286,9 @@ async fn import_api(
 /// The browser cannot fetch most spec URLs itself, because the hosts do not send CORS headers.
 async fn download_spec(state: &AppState, spec_url: &str) -> Result<String, ApiError> {
     let url = Url::parse(spec_url.trim()).map_err(|_| ApiError::InvalidSpecUrl)?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(ApiError::InvalidSpecUrl);
-    }
+    check_url(&url, state.allow_local_upstream).map_err(|_| ApiError::InvalidSpecUrl)?;
     let mut response = state
-        .http
+        .upstream
         .get(url)
         .send()
         .await

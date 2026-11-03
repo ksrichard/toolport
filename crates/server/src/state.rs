@@ -10,12 +10,16 @@ use crate::{
     live::LiveHub,
     mcp::{self, McpService, ToolportMcp},
     secrets::SecretsKey,
+    upstream_guard,
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub auth: Arc<AuthSettings>,
+    /// Guarded client for user-chosen URLs. `http` is for GitHub only.
+    pub upstream: reqwest::Client,
+    pub allow_local_upstream: bool,
     pub http: reqwest::Client,
     pub mcp: McpService,
     pub live: Arc<LiveHub>,
@@ -40,6 +44,8 @@ impl AppState {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(StartupError::HttpClient)?;
+        let upstream = upstream_guard::upstream_client(config.allow_local_upstream)
+            .map_err(StartupError::HttpClient)?;
         let auth = AuthSettings {
             secure_cookies: config.public_url.scheme() == "https",
             public_url: config.public_url.clone(),
@@ -54,7 +60,8 @@ impl AppState {
         let live = Arc::new(LiveHub::default());
         let handler = ToolportMcp::new(
             pool.clone(),
-            http.clone(),
+            upstream.clone(),
+            config.allow_local_upstream,
             Duration::from_millis(config.upstream_timeout_ms),
             live.clone(),
         );
@@ -63,6 +70,8 @@ impl AppState {
             mcp: mcp::service(handler, &config.public_url),
             pool,
             auth: Arc::new(auth),
+            upstream,
+            allow_local_upstream: config.allow_local_upstream,
             http,
             secrets: Arc::new(secrets),
         })

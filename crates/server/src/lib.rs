@@ -10,6 +10,7 @@ pub mod secrets;
 pub mod servers;
 pub mod state;
 pub mod templates;
+pub mod upstream_guard;
 pub mod users;
 
 use axum::{Json, Router, extract::State, middleware, routing::get};

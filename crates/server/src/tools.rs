@@ -9,11 +9,13 @@ use axum::{
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction, types::Json as Db};
+use toolport_core::server_name::is_valid_server_name;
 use toolport_core::{
-    HttpMethod, InputRow, InputType, TemplateError, ToolDef, parse_query_template,
-    schema_from_rows,
+    BODY_ARGUMENT, HttpMethod, InputRow, InputType, TemplateError, ToolDef, apply_rows,
+    parse_query_template, print_query_template, rows_from_schema, schema_from_rows,
     tool::{BodyDef, ParamDef, ParamLocation, RequestTemplate},
+    tool_json,
 };
 use ts_rs::TS;
 
@@ -21,7 +23,7 @@ use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
     secrets::seal,
-    servers::owned_server_id,
+    servers::{ServerSummary, mcp_url, owned_server_id},
     state::AppState,
     upstream::{ApiTarget, DraftSecret, HttpTrace, UpstreamAuth, UpstreamCtx, call_upstream},
 };
@@ -71,14 +73,14 @@ pub struct SaveApi {
 }
 
 /// A header row. A value of exactly `{input}` sends that input. Other text is sent as it is.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct HeaderRow {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ToolDraft {
     pub name: String,
@@ -161,6 +163,46 @@ pub fn routes() -> Router<AppState> {
         .route("/servers/{name}/apis/manual", post(create_api))
         .route("/servers/{name}/apis/{id}", put(update_api))
         .route("/servers/{name}/tools/test", post(test_tool))
+        .route("/servers/{name}/tools", post(create_tool))
+        .route(
+            "/servers/{name}/tools/{tool}",
+            get(get_tool).put(update_tool).delete(delete_tool),
+        )
+        .route("/servers/{name}/tools/{tool}/reset", post(reset_tool))
+        .route("/servers/with-tool", post(create_server_with_tool))
+}
+
+/// A stored tool, as the dashboard edits it.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ToolView {
+    /// `spec` or `manual`.
+    pub source: String,
+    /// True when a spec tool differs from the last import.
+    pub edited: bool,
+    pub spec_changed: bool,
+    #[ts(type = "number")]
+    pub api_id: i64,
+    pub draft: ToolDraft,
+    /// The tool as `tools/list` sends it.
+    #[ts(type = "unknown")]
+    pub preview: Value,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct SaveTool {
+    #[ts(type = "number")]
+    pub api_id: i64,
+    pub draft: ToolDraft,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct CreateServerWithTool {
+    pub server: String,
+    pub api: SaveApi,
+    pub draft: ToolDraft,
 }
 
 /// Turns a draft into a tool.
@@ -169,14 +211,7 @@ pub fn routes() -> Router<AppState> {
 /// - Each `key={x}` in the query is a query input. `key` is sent when it differs from `x`.
 /// - A header value of exactly `{x}` is a header input. Other values are fixed headers.
 pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
-    let name = draft.name.trim();
-    let valid = (1..=64).contains(&name.len())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    if !valid {
-        return Err(DraftError::InvalidToolName(draft.name.clone()));
-    }
+    let name = valid_tool_name(&draft.name)?;
     if let Some(row) = draft
         .inputs
         .iter()
@@ -244,6 +279,19 @@ pub fn draft_to_tool(draft: &ToolDraft) -> Result<ToolDef, DraftError> {
             fixed_headers,
         },
     })
+}
+
+fn valid_tool_name(text: &str) -> Result<&str, DraftError> {
+    let name = text.trim();
+    let valid = (1..=64).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if valid {
+        Ok(name)
+    } else {
+        Err(DraftError::InvalidToolName(text.to_owned()))
+    }
 }
 
 fn path_placeholders(path: &str) -> Vec<String> {
@@ -367,13 +415,25 @@ async fn create_api(
     ApiJson(body): ApiJson<SaveApi>,
 ) -> Result<(StatusCode, Json<ApiView>), ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    let id = insert_manual_api(&state, &mut tx, server_id, &body).await?;
+    tx.commit().await.map_err(ApiError::Database)?;
+    let view = api_view(&state.pool, id).await?;
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+async fn insert_manual_api(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    server_id: i64,
+    body: &SaveApi,
+) -> Result<i64, ApiError> {
     let api_name = clean_name(&body.name)?;
     let base_url = check_base_url(&body.base_url)?;
     let resolved = resolve_auth(&body.auth, None)?;
 
     // The sealed secret is bound to the API id, so the id must exist before we seal.
     // The auth check needs a value in the column, so the insert uses an empty placeholder.
-    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO apis (server_id, name, base_url, kind, auth_type, auth_header, auth_secret)
          VALUES ($1, $2, $3, 'manual', $4, $5, CASE WHEN $4 = 'none' THEN NULL ELSE ''::bytea END)
@@ -384,20 +444,18 @@ async fn create_api(
     .bind(&base_url)
     .bind(resolved.auth_type)
     .bind(&resolved.header)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(name_taken(api_name))?;
     if let Some(secret) = &resolved.new_secret {
         sqlx::query("UPDATE apis SET auth_secret = $1 WHERE id = $2")
             .bind(seal(&state.secrets, id, secret)?)
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(ApiError::Database)?;
     }
-    tx.commit().await.map_err(ApiError::Database)?;
-    let view = api_view(&state.pool, id).await?;
-    Ok((StatusCode::CREATED, Json(view)))
+    Ok(id)
 }
 
 async fn api_view(pool: &PgPool, id: i64) -> Result<ApiView, ApiError> {
@@ -536,4 +594,312 @@ fn target_of(
     let auth =
         UpstreamAuth::from_columns(auth_type, header, Some(sealed)).ok_or(ApiError::StoredAuth)?;
     Ok(ApiTarget { id, base_url, auth })
+}
+
+type ToolRow = (
+    i64,
+    i64,
+    String,
+    String,
+    Db<Map<String, Value>>,
+    Db<RequestTemplate>,
+    String,
+    bool,
+    Option<Db<Value>>,
+);
+
+fn tool_name_taken(name: &str) -> impl FnOnce(sqlx::Error) -> ApiError + '_ {
+    move |error| match &error {
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            ApiError::ToolNameTaken(name.to_owned())
+        }
+        _ => ApiError::Database(error),
+    }
+}
+
+/// The inverse of `draft_to_tool`, for a stored tool.
+fn stored_draft(
+    name: &str,
+    description: &str,
+    schema: &Map<String, Value>,
+    request: &RequestTemplate,
+) -> ToolDraft {
+    let has_body = request.body.is_some();
+    let mut inputs = rows_from_schema(schema);
+    if has_body {
+        inputs.retain(|row| row.name != BODY_ARGUMENT);
+    }
+    let key = |param: &ParamDef| param.target.clone().unwrap_or_else(|| param.name.clone());
+    let query: Vec<(String, String)> = request
+        .params
+        .iter()
+        .filter(|p| p.location == ParamLocation::Query)
+        .map(|p| (key(p), p.name.clone()))
+        .collect();
+    let mut headers: Vec<HeaderRow> = request
+        .params
+        .iter()
+        .filter(|p| p.location == ParamLocation::Header)
+        .map(|p| HeaderRow {
+            name: key(p),
+            value: format!("{{{}}}", p.name),
+        })
+        .collect();
+    headers.extend(request.fixed_headers.iter().map(|(name, value)| HeaderRow {
+        name: name.clone(),
+        value: value.clone(),
+    }));
+    let body_schema = if has_body {
+        schema
+            .get("properties")
+            .and_then(|p| p.get(BODY_ARGUMENT))
+            .cloned()
+    } else {
+        None
+    };
+    ToolDraft {
+        name: name.to_owned(),
+        description: description.to_owned(),
+        method: request.method,
+        path: request.path.clone(),
+        query: print_query_template(&query),
+        headers,
+        inputs,
+        body_schema,
+    }
+}
+
+fn row_view(row: ToolRow) -> ToolView {
+    let (_, api_id, name, description, Db(schema), Db(request), source, edited, _) = row;
+    ToolView {
+        draft: stored_draft(&name, &description, &schema, &request),
+        preview: tool_json(&name, &description, &schema),
+        source,
+        edited,
+        spec_changed: false,
+        api_id,
+    }
+}
+
+async fn fetch_tool(pool: &PgPool, server_id: i64, name: &str) -> Result<ToolRow, ApiError> {
+    sqlx::query_as(
+        "SELECT id, api_id, name, description, input_schema, request, source, edited, spec_tool
+         FROM tools WHERE server_id = $1 AND name = $2",
+    )
+    .bind(server_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::Database)?
+    .ok_or(ApiError::NotFound)
+}
+
+async fn api_in_server(pool: &PgPool, server_id: i64, api_id: i64) -> Result<(), ApiError> {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM apis WHERE id = $1 AND server_id = $2")
+        .bind(api_id)
+        .bind(server_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::Database)?
+        .map(|_| ())
+        .ok_or(ApiError::NotFound)
+}
+
+async fn insert_manual_tool(
+    tx: &mut Transaction<'_, Postgres>,
+    server_id: i64,
+    api_id: i64,
+    tool: &ToolDef,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO tools (api_id, server_id, name, description, input_schema, request, source)
+         VALUES ($1, $2, $3, $4, $5, $6, 'manual')",
+    )
+    .bind(api_id)
+    .bind(server_id)
+    .bind(&tool.name)
+    .bind(&tool.description)
+    .bind(Db(&tool.input_schema))
+    .bind(Db(&tool.request))
+    .execute(&mut **tx)
+    .await
+    .map_err(tool_name_taken(&tool.name))?;
+    Ok(())
+}
+
+async fn get_tool(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((name, tool)): Path<(String, String)>,
+) -> Result<Json<ToolView>, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let row = fetch_tool(&state.pool, server_id, &tool).await?;
+    Ok(Json(row_view(row)))
+}
+
+async fn create_tool(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+    ApiJson(body): ApiJson<SaveTool>,
+) -> Result<(StatusCode, Json<ToolView>), ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let tool = draft_to_tool(&body.draft)?;
+    api_in_server(&state.pool, server_id, body.api_id).await?;
+    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    insert_manual_tool(&mut tx, server_id, body.api_id, &tool).await?;
+    tx.commit().await.map_err(ApiError::Database)?;
+    state.peers.notify_tools_changed(server_id).await;
+    let row = fetch_tool(&state.pool, server_id, &tool.name).await?;
+    Ok((StatusCode::CREATED, Json(row_view(row))))
+}
+
+async fn update_tool(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((name, tool)): Path<(String, String)>,
+    ApiJson(body): ApiJson<SaveTool>,
+) -> Result<Json<ToolView>, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let row = fetch_tool(&state.pool, server_id, &tool).await?;
+    let (id, api_id, _, _, Db(schema), Db(request), source, _, _) = row;
+    let new_name = if source == "spec" {
+        // Only the name, the description, and the input table can change.
+        let stored = stored_draft("", "", &schema, &request);
+        let draft = &body.draft;
+        let same = body.api_id == api_id
+            && draft.method == stored.method
+            && draft.path == stored.path
+            && draft.query == stored.query
+            && draft.headers == stored.headers
+            && draft.body_schema == stored.body_schema;
+        if !same {
+            return Err(ApiError::SpecToolFixed);
+        }
+        let new_name = valid_tool_name(&draft.name)?;
+        let mut rows = draft.inputs.clone();
+        if request.body.is_some() {
+            rows.retain(|row| row.name != BODY_ARGUMENT);
+        }
+        sqlx::query(
+            "UPDATE tools SET name = $1, description = $2, input_schema = $3, edited = true
+             WHERE id = $4",
+        )
+        .bind(new_name)
+        .bind(&draft.description)
+        .bind(Db(apply_rows(&schema, &rows)))
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(tool_name_taken(new_name))?;
+        new_name.to_owned()
+    } else {
+        let def = draft_to_tool(&body.draft)?;
+        api_in_server(&state.pool, server_id, body.api_id).await?;
+        sqlx::query(
+            "UPDATE tools SET api_id = $1, name = $2, description = $3, input_schema = $4,
+                    request = $5 WHERE id = $6",
+        )
+        .bind(body.api_id)
+        .bind(&def.name)
+        .bind(&def.description)
+        .bind(Db(&def.input_schema))
+        .bind(Db(&def.request))
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(tool_name_taken(&def.name))?;
+        def.name
+    };
+    state.peers.notify_tools_changed(server_id).await;
+    let row = fetch_tool(&state.pool, server_id, &new_name).await?;
+    Ok(Json(row_view(row)))
+}
+
+/// Copies the last import back over the tool.
+async fn reset_tool(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((name, tool)): Path<(String, String)>,
+) -> Result<Json<ToolView>, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let row = fetch_tool(&state.pool, server_id, &tool).await?;
+    let (id, _, _, _, _, _, source, _, spec_tool) = row;
+    let Some(Db(original)) = spec_tool.filter(|_| source == "spec") else {
+        return Err(ApiError::NotASpecTool);
+    };
+    let original: ToolDef = serde_json::from_value(original).map_err(|_| ApiError::StoredTool)?;
+    sqlx::query(
+        "UPDATE tools SET name = $1, description = $2, input_schema = $3, request = $4,
+                edited = false WHERE id = $5",
+    )
+    .bind(&original.name)
+    .bind(&original.description)
+    .bind(Db(&original.input_schema))
+    .bind(Db(&original.request))
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(tool_name_taken(&original.name))?;
+    state.peers.notify_tools_changed(server_id).await;
+    let row = fetch_tool(&state.pool, server_id, &original.name).await?;
+    Ok(Json(row_view(row)))
+}
+
+async fn delete_tool(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((name, tool)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let row = fetch_tool(&state.pool, server_id, &tool).await?;
+    if row.6 == "spec" {
+        return Err(ApiError::SpecToolCannotBeDeleted);
+    }
+    sqlx::query("DELETE FROM tools WHERE id = $1")
+        .bind(row.0)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::Database)?;
+    state.peers.notify_tools_changed(server_id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Creates the server, a manual API, and the first tool in one transaction.
+async fn create_server_with_tool(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    ApiJson(body): ApiJson<CreateServerWithTool>,
+) -> Result<(StatusCode, Json<ServerSummary>), ApiError> {
+    let server_name = body.server.trim();
+    if !is_valid_server_name(server_name) {
+        return Err(ApiError::InvalidServerName);
+    }
+    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    let server_id: i64 =
+        sqlx::query_scalar("INSERT INTO servers (user_id, name) VALUES ($1, $2) RETURNING id")
+            .bind(auth.user_id)
+            .bind(server_name)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|error| match &error {
+                sqlx::Error::Database(db) if db.is_unique_violation() => {
+                    ApiError::ServerNameTaken(server_name.to_owned())
+                }
+                _ => ApiError::Database(error),
+            })?;
+    let api_id = insert_manual_api(&state, &mut tx, server_id, &body.api).await?;
+    let tool = draft_to_tool(&body.draft)?;
+    insert_manual_tool(&mut tx, server_id, api_id, &tool).await?;
+    tx.commit().await.map_err(ApiError::Database)?;
+    state.peers.notify_tools_changed(server_id).await;
+    let summary = ServerSummary {
+        name: server_name.to_owned(),
+        mcp_url: mcp_url(&state, server_name),
+        apis: 1,
+        tools: 1,
+        enabled_tools: 1,
+        active_tokens: 0,
+    };
+    Ok((StatusCode::CREATED, Json(summary)))
 }

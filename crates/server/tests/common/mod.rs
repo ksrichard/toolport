@@ -61,6 +61,7 @@ pub fn config(github_url: &str) -> Config {
         "--database-url=postgres://unused",
         "--public-url=https://toolport.test",
         "--jwt-secret=test-secret-that-is-at-least-32-characters",
+        &format!("--secrets-key={}", "0".repeat(64)),
         "--github-client-id=test-client-id",
         "--github-client-secret=test-client-secret",
         &format!("--github-oauth-url={github_url}"),

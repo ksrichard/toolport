@@ -7,6 +7,7 @@ publish.workspace = true
 default-run = "server"
 
 [dependencies]
+aes-gcm = "0.10"
 axum = { version = "0.8.9", features = ["macros"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
@@ -26,6 +27,7 @@ toolport-core = { version = "0.1.0", path = "../core" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 ts-rs = "12.0.1"
+zeroize = "1.9.1"
 
 [dev-dependencies]
 http-body-util = "0.1.5"

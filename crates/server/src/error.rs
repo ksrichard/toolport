@@ -10,7 +10,9 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{auth::github::GithubError, import::ImportError, mcp_tokens::TokenError};
+use crate::{
+    auth::github::GithubError, import::ImportError, mcp_tokens::TokenError, secrets::SecretsError,
+};
 
 /// Errors that stop the server before or while it serves requests.
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +23,8 @@ pub enum StartupError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("cannot create the HTTP client")]
     HttpClient(#[source] reqwest::Error),
+    #[error("the secrets key is not valid")]
+    SecretsKey(#[source] SecretsError),
     #[error("cannot bind to {addr}")]
     Bind {
         addr: SocketAddr,

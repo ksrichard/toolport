@@ -9,6 +9,7 @@ use crate::{
     error::StartupError,
     live::LiveHub,
     mcp::{self, McpService, ToolportMcp},
+    secrets::SecretsKey,
 };
 
 #[derive(Clone)]
@@ -18,6 +19,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub mcp: McpService,
     pub live: Arc<LiveHub>,
+    pub secrets: Arc<SecretsKey>,
 }
 
 pub struct AuthSettings {
@@ -47,6 +49,8 @@ impl AppState {
             github_api_url: config.github_api_url.clone(),
             jwt: JwtKeys::new(config.jwt_secret.as_bytes()),
         };
+        let secrets =
+            SecretsKey::from_hex(&config.secrets_key).map_err(StartupError::SecretsKey)?;
         let live = Arc::new(LiveHub::default());
         let handler = ToolportMcp::new(
             pool.clone(),
@@ -60,6 +64,7 @@ impl AppState {
             pool,
             auth: Arc::new(auth),
             http,
+            secrets: Arc::new(secrets),
         })
     }
 }

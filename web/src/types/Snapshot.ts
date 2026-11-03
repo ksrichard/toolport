@@ -5,7 +5,7 @@ import type { ConnectedClient } from "./ConnectedClient";
 import type { Metrics } from "./Metrics";
 
 /**
- * The first event of a stream. It is also sent again when the stream falls behind.
+ * The first event of a stream. It is also sent again when the stream misses calls.
  */
 export type Snapshot = { metrics: Metrics, clients: Array<ConnectedClient>, buckets: Array<Bucket>, 
 /**

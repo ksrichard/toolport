@@ -34,6 +34,10 @@ pub struct Config {
     #[arg(long, env = "JWT_SECRET", hide_env_values = true, value_parser = parse_jwt_secret)]
     pub jwt_secret: String,
 
+    /// Key that encrypts the upstream API secrets. 64 hex characters. Make one with: openssl rand -hex 32
+    #[arg(long, env = "SECRETS_KEY", hide_env_values = true)]
+    pub secrets_key: String,
+
     /// Client ID of the GitHub OAuth app.
     #[arg(long, env = "GITHUB_CLIENT_ID", value_parser = NonEmptyStringValueParser::new())]
     pub github_client_id: String,

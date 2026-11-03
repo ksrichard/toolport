@@ -89,9 +89,13 @@ pub enum ImportApi {
 pub struct ImportedApi {
     pub name: String,
     pub base_url: String,
-    /// True when an API with the same name existed and its tools were replaced.
+    /// True when an API with the same name existed. It was updated in place.
     pub replaced: bool,
     pub tools: Vec<String>,
+    /// Edited tools that stayed.
+    pub kept: Vec<String>,
+    /// Spec tools deleted because the spec no longer has their operation.
+    pub removed: Vec<String>,
     pub skipped: Vec<SkippedTool>,
 }
 
@@ -218,7 +222,9 @@ async fn list_tools(
     let tools = sqlx::query_as(
         "SELECT t.name, t.description, t.request->>'method' AS method,
                 t.request->>'path' AS path, a.name AS api, t.enabled,
-                t.source, t.edited, false AS spec_changed
+                t.source, t.edited,
+                (t.edited AND t.edited_hash IS NOT NULL AND t.spec_hash <> t.edited_hash)
+                    AS spec_changed
          FROM tools t JOIN apis a ON a.id = t.api_id
          WHERE t.server_id = $1 ORDER BY t.id",
     )
@@ -231,14 +237,14 @@ async fn list_tools(
 
 /// Imports one API, or every API of a template. Each API has its own transaction, so a
 /// failure keeps the APIs before it. The same request can run again, because an API with
-/// the same name gets replaced.
+/// the same name gets updated.
 async fn import_api(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(name): Path<String>,
     ApiJson(body): ApiJson<ImportApi>,
 ) -> Result<Json<Vec<ImportedApi>>, ApiError> {
-    owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
 
     let (specs, base_url): (Vec<String>, Option<String>) = match body {
         ImportApi::Template { template } => {
@@ -269,11 +275,16 @@ async fn import_api(
             },
         )
         .await?;
+        if report.replaced {
+            state.peers.notify_tools_changed(server_id).await;
+        }
         imported.push(ImportedApi {
             name: report.api_name,
             base_url: report.base_url.to_string(),
             replaced: report.replaced,
             tools: report.tools,
+            kept: report.kept,
+            removed: report.removed,
             skipped: report
                 .skipped
                 .into_iter()

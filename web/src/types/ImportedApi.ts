@@ -3,6 +3,14 @@ import type { SkippedTool } from "./SkippedTool";
 
 export type ImportedApi = { name: string, base_url: string, 
 /**
- * True when an API with the same name existed and its tools were replaced.
+ * True when an API with the same name existed. It was updated in place.
  */
-replaced: boolean, tools: Array<string>, skipped: Array<SkippedTool>, };
+replaced: boolean, tools: Array<string>, 
+/**
+ * Edited tools that stayed.
+ */
+kept: Array<string>, 
+/**
+ * Spec tools deleted because the spec no longer has their operation.
+ */
+removed: Array<string>, skipped: Array<SkippedTool>, };

@@ -38,6 +38,10 @@ pub struct Config {
     #[arg(long, env = "SECRETS_KEY", hide_env_values = true)]
     pub secrets_key: String,
 
+    /// Lets upstream calls reach loopback addresses. Use it only for local dev and tests.
+    #[arg(long, env = "ALLOW_LOCAL_UPSTREAM", default_value_t = false)]
+    pub allow_local_upstream: bool,
+
     /// Client ID of the GitHub OAuth app.
     #[arg(long, env = "GITHUB_CLIENT_ID", value_parser = NonEmptyStringValueParser::new())]
     pub github_client_id: String,

@@ -31,6 +31,7 @@ use rmcp::{
 use sqlx::{PgPool, types::Json};
 use toolport_core::{ArgumentError, HttpMethod, RequestTemplate, UpstreamRequest, build_request};
 
+use crate::upstream_guard::{BlockedAddress, check_url};
 use crate::{
     auth::bearer_token,
     calls::{self, CallResult, NewCall},
@@ -94,6 +95,7 @@ pub async fn authorize(
 pub struct ToolportMcp {
     pool: PgPool,
     http: reqwest::Client,
+    allow_local_upstream: bool,
     upstream_timeout: Duration,
     live: Arc<LiveHub>,
 }
@@ -112,6 +114,8 @@ pub enum CallError {
     InvalidHeader(String),
     #[error("the stored base URL {0} is not valid")]
     BaseUrl(String),
+    #[error(transparent)]
+    Blocked(#[from] BlockedAddress),
     #[error("the database query failed")]
     Database(#[source] sqlx::Error),
 }
@@ -119,7 +123,10 @@ pub enum CallError {
 impl From<CallError> for McpError {
     fn from(error: CallError) -> Self {
         match error {
-            CallError::UnknownTool(_) | CallError::Argument(_) | CallError::InvalidHeader(_) => {
+            CallError::UnknownTool(_)
+            | CallError::Argument(_)
+            | CallError::InvalidHeader(_)
+            | CallError::Blocked(_) => {
                 tracing::debug!(error = %error_chain(&error), "MCP tool call rejected");
                 McpError::invalid_params(error.to_string(), None)
             }
@@ -135,12 +142,14 @@ impl ToolportMcp {
     pub fn new(
         pool: PgPool,
         http: reqwest::Client,
+        allow_local_upstream: bool,
         upstream_timeout: Duration,
         live: Arc<LiveHub>,
     ) -> Self {
         Self {
             pool,
             http,
+            allow_local_upstream,
             upstream_timeout,
             live,
         }
@@ -182,6 +191,7 @@ impl ToolportMcp {
 
         let upstream = build_request(&template, args)?;
         let url = upstream_url(&base_url, &upstream)?;
+        check_url(&url, self.allow_local_upstream)?;
         let mut builder = self
             .http
             .request(method(upstream.method), url)

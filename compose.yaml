@@ -29,6 +29,7 @@ services:
       PUBLIC_URL: https://${TOOLPORT_DOMAIN:-localhost}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env}
+      ALLOW_LOCAL_UPSTREAM: ${ALLOW_LOCAL_UPSTREAM:-false}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?set GITHUB_CLIENT_ID in .env}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?set GITHUB_CLIENT_SECRET in .env}
     depends_on:

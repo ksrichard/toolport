@@ -62,6 +62,7 @@ pub fn config(github_url: &str) -> Config {
         "--public-url=https://toolport.test",
         "--jwt-secret=test-secret-that-is-at-least-32-characters",
         &format!("--secrets-key={}", "0".repeat(64)),
+        "--allow-local-upstream",
         "--github-client-id=test-client-id",
         "--github-client-secret=test-client-secret",
         &format!("--github-oauth-url={github_url}"),

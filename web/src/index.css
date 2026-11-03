@@ -266,6 +266,7 @@ tr.new td { animation: flash 1.2s ease-out; }
 
 /* tool builder */
 .builder { display: grid; gap: 16px; }
+.spec-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .builder-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 1fr); gap: 16px; align-items: start; }
 .builder-grid .arrow { align-self: center; font: 600 1.6rem var(--f-data); color: var(--accent); }
 .form h2 { align-items: center; }

@@ -140,6 +140,9 @@ export const updateTool = (name: string, tool: string, body: SaveTool) =>
 export const resetTool = (name: string, tool: string) =>
   api<ToolView>(`${toolPath(name, tool)}/reset`, { method: 'POST' })
 
+export const detachTool = (name: string, tool: string) =>
+  api<ToolView>(`${toolPath(name, tool)}/detach`, { method: 'POST' })
+
 export const setToolEnabled = (name: string, tool: string, enabled: boolean) =>
   api<void>(`${toolPath(name, tool)}/enabled`, json('PUT', { enabled } satisfies SetToolEnabled))
 

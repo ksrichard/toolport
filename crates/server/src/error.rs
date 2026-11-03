@@ -97,8 +97,10 @@ pub enum ApiError {
     ToolNameTaken(String),
     #[error("a spec tool can change only its name, description, and inputs")]
     SpecToolFixed,
-    #[error("only a tool from a spec can be reset")]
+    #[error("the tool does not come from a spec")]
     NotASpecTool,
+    #[error("the tool is not a manual tool")]
+    NotAManualTool,
     #[error("a tool from a spec cannot be deleted")]
     SpecToolCannotBeDeleted,
     #[error("at least one tool of the server must stay on")]
@@ -140,6 +142,7 @@ impl ApiError {
             | Self::SpecApiFixed
             | Self::SpecToolFixed
             | Self::NotASpecTool
+            | Self::NotAManualTool
             | Self::SpecToolCannotBeDeleted
             | Self::LastEnabledTool
             | Self::TestNeedsDraft => StatusCode::UNPROCESSABLE_ENTITY,
@@ -191,6 +194,7 @@ impl ApiError {
             Self::ToolNameTaken(_) => "tool_name_taken",
             Self::SpecToolFixed => "spec_tool_fixed",
             Self::NotASpecTool => "not_a_spec_tool",
+            Self::NotAManualTool => "not_a_manual_tool",
             Self::SpecToolCannotBeDeleted => "spec_tool_cannot_be_deleted",
             Self::LastEnabledTool => "last_enabled_tool",
             Self::TestNeedsDraft => "invalid_test_call",

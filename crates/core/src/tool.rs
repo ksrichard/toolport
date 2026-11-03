@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use ts_rs::TS;
 
 /// The name of the tool argument that holds the JSON request body.
 pub const BODY_ARGUMENT: &str = "body";
@@ -23,6 +24,9 @@ pub struct RequestTemplate {
     pub path: String,
     pub params: Vec<ParamDef>,
     pub body: Option<BodyDef>,
+    /// Headers that the server sends on every call, before the input headers.
+    #[serde(default)]
+    pub fixed_headers: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -30,6 +34,9 @@ pub struct ParamDef {
     pub name: String,
     pub location: ParamLocation,
     pub required: bool,
+    /// The key sent upstream, when it differs from the input name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,7 +53,8 @@ pub struct BodyDef {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HttpMethod {
     Get,

@@ -137,6 +137,7 @@ fn convert_operation(
             name: data.name.clone(),
             location,
             required: is_required,
+            target: None,
         });
     }
 
@@ -177,6 +178,7 @@ fn convert_operation(
             path: path.to_owned(),
             params,
             body,
+            fixed_headers: Vec::new(),
         },
     })
 }

@@ -32,7 +32,7 @@ pub fn build_request(
 
     let mut path_values = Vec::new();
     let mut query = Vec::new();
-    let mut headers = Vec::new();
+    let mut headers = template.fixed_headers.clone();
     for param in &template.params {
         let Some(value) = arg(&param.name) else {
             if param.required {
@@ -40,17 +40,18 @@ pub fn build_request(
             }
             continue;
         };
+        let key = param.target.as_ref().unwrap_or(&param.name);
         match param.location {
-            ParamLocation::Path => path_values.push((param.name.as_str(), joined(value))),
-            ParamLocation::Header => headers.push((param.name.clone(), joined(value))),
+            ParamLocation::Path => path_values.push((key.as_str(), joined(value))),
+            ParamLocation::Header => headers.push((key.clone(), joined(value))),
             // Form style with explode, the OpenAPI default: `?tag=a&tag=b`.
             ParamLocation::Query => match value {
                 Value::Array(items) => {
                     for item in items.iter().filter(|v| !v.is_null()) {
-                        query.push((param.name.clone(), text(item)));
+                        query.push((key.clone(), text(item)));
                     }
                 }
-                _ => query.push((param.name.clone(), text(value))),
+                _ => query.push((key.clone(), text(value))),
             },
         }
     }
@@ -143,6 +144,7 @@ mod tests {
                 content_type: "application/json".into(),
                 required: false,
             }),
+            fixed_headers: Vec::new(),
         }
     }
 
@@ -151,6 +153,7 @@ mod tests {
             name: name.into(),
             location,
             required,
+            target: None,
         }
     }
 
@@ -222,5 +225,48 @@ mod tests {
         });
         let result = build_request(&template, &args(json!({ "petId": 1, "name": "n" })));
         assert_eq!(result, Err(ArgumentError::Missing("body".into())));
+    }
+
+    #[test]
+    fn target_renames_the_query_key() {
+        let mut template = template();
+        template.path = "/weather".into();
+        template.params = vec![ParamDef {
+            target: Some("latitude".into()),
+            ..param("lat", ParamLocation::Query, true)
+        }];
+        let request = build_request(&template, &args(json!({ "lat": 47.5 }))).unwrap();
+        assert_eq!(request.query, [("latitude".into(), "47.5".into())]);
+    }
+
+    #[test]
+    fn fixed_headers_are_sent() {
+        let mut template = template();
+        template.fixed_headers = vec![("x-source".into(), "toolport".into())];
+        let request = build_request(
+            &template,
+            &args(json!({ "petId": 1, "name": "n", "api_key": "k" })),
+        )
+        .unwrap();
+        assert_eq!(
+            request.headers,
+            [
+                ("x-source".into(), "toolport".into()),
+                ("api_key".into(), "k".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn old_request_json_still_parses() {
+        let old = json!({
+            "method": "GET",
+            "path": "/x",
+            "params": [{ "name": "a", "location": "query", "required": true }],
+            "body": null,
+        });
+        let template: RequestTemplate = serde_json::from_value(old).unwrap();
+        assert_eq!(template.params[0].target, None);
+        assert!(template.fixed_headers.is_empty());
     }
 }

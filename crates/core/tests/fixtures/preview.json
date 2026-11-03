@@ -1,0 +1,66 @@
+[
+  {
+    "name": "get_weather without descriptions",
+    "rows": [
+      { "name": "lat", "input_type": "number", "required": true, "description": "" },
+      { "name": "lon", "input_type": "number", "required": true, "description": "" }
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "lat": { "type": "number" },
+        "lon": { "type": "number" }
+      },
+      "required": ["lat", "lon"]
+    }
+  },
+  {
+    "name": "get_weather with descriptions",
+    "rows": [
+      { "name": "lat", "input_type": "number", "required": true, "description": "Latitude in degrees" },
+      { "name": "lon", "input_type": "number", "required": true, "description": "Longitude in degrees" }
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "lat": { "type": "number", "description": "Latitude in degrees" },
+        "lon": { "type": "number", "description": "Longitude in degrees" }
+      },
+      "required": ["lat", "lon"]
+    }
+  },
+  {
+    "name": "optional string array",
+    "rows": [
+      { "name": "tags", "input_type": "string_array", "required": false, "description": "Tags to match" }
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to match" }
+      }
+    }
+  },
+  {
+    "name": "no rows",
+    "rows": [],
+    "schema": { "type": "object", "properties": {} }
+  },
+  {
+    "name": "rows and a body",
+    "rows": [
+      { "name": "id", "input_type": "integer", "required": true, "description": "" },
+      { "name": "dry_run", "input_type": "boolean", "required": false, "description": "" }
+    ],
+    "body": { "type": "object", "properties": { "name": { "type": "string" } } },
+    "schema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "dry_run": { "type": "boolean" },
+        "body": { "type": "object", "properties": { "name": { "type": "string" } } }
+      },
+      "required": ["id"]
+    }
+  }
+]

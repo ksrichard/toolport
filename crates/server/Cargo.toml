@@ -32,3 +32,5 @@ zeroize = "1.9.1"
 [dev-dependencies]
 http-body-util = "0.1.5"
 tower = { version = "0.5.3", features = ["util"] }
+# `test-util` lets tests pause and move the tokio clock.
+tokio = { version = "1.54.0", features = ["test-util"] }

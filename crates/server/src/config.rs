@@ -31,6 +31,11 @@ pub struct Config {
     #[arg(long, env = "SPEC_CHECK_INTERVAL_SECS", default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..))]
     pub spec_check_interval_secs: u64,
 
+    /// Tool calls per minute for each MCP token. A token can send a burst of the calls of
+    /// 10 seconds. 0 turns the limit off.
+    #[arg(long, env = "RATE_LIMIT_PER_MINUTE", default_value_t = 60)]
+    pub rate_limit_per_minute: u32,
+
     /// The URL that users open in the browser. GitHub sends users back to this URL after sign-in.
     #[arg(long, env = "PUBLIC_URL")]
     pub public_url: Url,

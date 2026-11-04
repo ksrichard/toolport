@@ -88,7 +88,7 @@ async fn zero_retention_keeps_all_calls(pool: PgPool) {
     assert_eq!(count(&pool).await, 5);
 }
 
-async fn get_series(state: &AppState, user_id: i64, path: &str) -> (StatusCode, Value) {
+async fn get_json(state: &AppState, user_id: i64, path: &str) -> (StatusCode, Value) {
     let access = state.auth.jwt.issue_access(user_id).unwrap();
     let request = Request::get(path)
         .header(header::AUTHORIZATION, format!("Bearer {access}"))
@@ -123,7 +123,7 @@ async fn series_has_every_bucket_and_exact_edges(pool: PgPool) {
     insert_at_bucket_edges(&pool, server).await;
     let state = common::state(pool.clone()).await;
 
-    let (status, body) = get_series(&state, 1, "/api/servers/pets/calls/series?window=30d").await;
+    let (status, body) = get_json(&state, 1, "/api/servers/pets/calls/series?window=30d").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["bucket_secs"], 6 * 3600);
     let buckets = body["buckets"].as_array().unwrap();
@@ -161,7 +161,7 @@ async fn each_window_has_its_bucket_size(pool: PgPool) {
         ("30d", 21_600, 120),
     ] {
         let path = format!("/api/servers/pets/calls/series?window={window}");
-        let (status, body) = get_series(&state, 1, &path).await;
+        let (status, body) = get_json(&state, 1, &path).await;
         assert_eq!(status, StatusCode::OK, "{window}");
         assert_eq!(body["bucket_secs"], bucket_secs, "{window}");
         let buckets = body["buckets"].as_array().unwrap();
@@ -177,13 +177,127 @@ async fn series_needs_an_own_server_and_a_known_window(pool: PgPool) {
     common::create_user(&pool, 2, "other").await;
     let state = common::state(pool).await;
 
-    let (status, body) = get_series(&state, 2, "/api/servers/pets/calls/series?window=1h").await;
+    let (status, body) = get_json(&state, 2, "/api/servers/pets/calls/series?window=1h").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "not_found");
 
     for query in ["window=5m", "window=", ""] {
         let path = format!("/api/servers/pets/calls/series?{query}");
-        let (status, body) = get_series(&state, 1, &path).await;
+        let (status, body) = get_json(&state, 1, &path).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(body["error"], "invalid_query", "{query}");
+    }
+}
+
+fn ids(page: &Value) -> Vec<i64> {
+    page["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect()
+}
+
+/// Reads all pages from the newest call to the oldest one.
+async fn all_pages(state: &AppState, limit: u32) -> Vec<Vec<i64>> {
+    let mut pages = Vec::new();
+    let mut before: Option<i64> = None;
+    loop {
+        let path = match before {
+            None => format!("/api/servers/pets/calls?limit={limit}"),
+            Some(id) => format!("/api/servers/pets/calls?limit={limit}&before={id}"),
+        };
+        let (status, body) = get_json(state, 1, &path).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let page = ids(&body);
+        let has_more = body["has_more"].as_bool().unwrap();
+        before = page.last().copied();
+        pages.push(page);
+        if !has_more {
+            return pages;
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn call_pages_have_no_gaps_and_no_duplicates(pool: PgPool) {
+    server_with_calls(&pool, 0, 25).await;
+    let state = common::state(pool.clone()).await;
+    let all: Vec<i64> = sqlx::query_scalar("SELECT id FROM calls ORDER BY id DESC")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+    let pages = all_pages(&state, 10).await;
+    assert_eq!(pages.iter().map(Vec::len).collect::<Vec<_>>(), [10, 10, 5]);
+    assert_eq!(pages.concat(), all);
+
+    // 20 calls fill exactly one page of 20. The extra row decides `has_more`.
+    let (_, body) = get_json(&state, 1, "/api/servers/pets/calls?limit=20").await;
+    assert_eq!(body["has_more"], true);
+    let before = ids(&body)[19];
+    let path = format!("/api/servers/pets/calls?limit=20&before={before}");
+    let (_, body) = get_json(&state, 1, &path).await;
+    assert_eq!(ids(&body), all[20..]);
+    assert_eq!(body["has_more"], false);
+
+    let pages = all_pages(&state, 50).await;
+    assert_eq!(pages, [all]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn call_page_edges(pool: PgPool) {
+    server_with_calls(&pool, 0, 20).await;
+    let state = common::state(pool.clone()).await;
+    let oldest: i64 = sqlx::query_scalar("SELECT min(id) FROM calls")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Without a limit the page has 20 rows. 20 calls give no older page.
+    let (_, body) = get_json(&state, 1, "/api/servers/pets/calls").await;
+    assert_eq!(ids(&body).len(), 20);
+    assert_eq!(body["has_more"], false);
+
+    // Nothing is older than the oldest call.
+    let path = format!("/api/servers/pets/calls?limit=10&before={oldest}");
+    let (status, body) = get_json(&state, 1, &path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ids(&body), Vec::<i64>::new());
+    assert_eq!(body["has_more"], false);
+
+    // A new call does not change an older page.
+    let path = format!("/api/servers/pets/calls?limit=10&before={}", oldest + 10);
+    let (_, before) = get_json(&state, 1, &path).await;
+    add_new_call(&pool).await;
+    let (_, after) = get_json(&state, 1, &path).await;
+    assert_eq!(before, after);
+    assert_eq!(ids(&after), (oldest..oldest + 10).rev().collect::<Vec<_>>());
+}
+
+async fn add_new_call(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO calls (server_id, tool, result, latency_ms)
+         SELECT id, 'later', 'ok', 10 FROM servers WHERE name = 'pets'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn call_pages_need_an_own_server_and_a_known_limit(pool: PgPool) {
+    server_with_calls(&pool, 0, 1).await;
+    common::create_user(&pool, 2, "other").await;
+    let state = common::state(pool).await;
+
+    let (status, body) = get_json(&state, 2, "/api/servers/pets/calls?limit=10").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+
+    for query in ["limit=5", "limit=100", "limit=", "limit=ten", "before=abc"] {
+        let path = format!("/api/servers/pets/calls?{query}");
+        let (status, body) = get_json(&state, 1, &path).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
         assert_eq!(body["error"], "invalid_query", "{query}");
     }

@@ -23,7 +23,7 @@ use ts_rs::TS;
 
 use crate::{
     auth::AuthUser,
-    calls::{self, Bucket, CallRecord, CallSeries, Metrics, SeriesWindow},
+    calls::{self, Bucket, CallPage, CallRecord, CallSeries, Metrics, SeriesWindow},
     error::{ApiError, ApiQuery, error_chain},
     mcp_tokens::McpCaller,
     servers::owned_server_id,
@@ -234,6 +234,51 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/servers/{name}/live", get(live))
         .route("/servers/{name}/calls/series", get(series))
+        .route("/servers/{name}/calls", get(call_page))
+}
+
+/// The page sizes that the call log offers.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+enum PageSize {
+    #[serde(rename = "10")]
+    Ten,
+    #[default]
+    #[serde(rename = "20")]
+    Twenty,
+    #[serde(rename = "50")]
+    Fifty,
+}
+
+impl PageSize {
+    fn rows(self) -> i64 {
+        match self {
+            Self::Ten => 10,
+            Self::Twenty => 20,
+            Self::Fifty => 50,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PageParams {
+    #[serde(default)]
+    limit: PageSize,
+    /// The id of the last call of the newer page. Without it, the page starts at the newest call.
+    before: Option<i64>,
+}
+
+/// The older pages of the call log. The first page comes from the SSE stream.
+async fn call_page(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+    ApiQuery(params): ApiQuery<PageParams>,
+) -> Result<Json<CallPage>, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let page = calls::page(&state.pool, server_id, params.before, params.limit.rows())
+        .await
+        .map_err(ApiError::Database)?;
+    Ok(Json(page))
 }
 
 #[derive(Debug, Deserialize)]

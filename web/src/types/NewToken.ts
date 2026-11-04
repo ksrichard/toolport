@@ -4,4 +4,8 @@ import type { TokenView } from "./TokenView";
 /**
  * The only response that contains the token value.
  */
-export type NewToken = { token: string, expires_in_days: number, row: TokenView, };
+export type NewToken = { token: string, 
+/**
+ * `null` for a token that never expires.
+ */
+expires_in_days: number | null, row: TokenView, };

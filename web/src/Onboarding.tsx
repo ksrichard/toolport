@@ -21,6 +21,9 @@ const SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/
 /** Token names need not be unique. The date tells two onboarding tokens apart on the Tokens page. */
 const tokenName = () => `first-client ${new Date().toISOString().slice(0, 10)}`
 
+const lifetimeText = (token: NewToken) =>
+  token.expires_in_days === null ? 'The token never expires.' : `The token works for ${token.expires_in_days} days.`
+
 type Step = 'pick' | 'name' | 'build' | 'connect'
 const STEPS: { id: Step; label: string }[] = [
   { id: 'pick', label: 'Pick a template' },
@@ -312,8 +315,8 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
             hint={client === 'Claude Code' ? 'Paste this into your terminal:' : WHERE[client]}
           />
           <p className="note">
-            The command contains a token. ToolPort shows it only now and does not store it. The token works for{' '}
-            {token.expires_in_days} days. You can revoke it on the Tokens page.
+            The command contains a token. ToolPort shows it only now and does not store it. {lifetimeText(token)} You
+            can revoke it on the Tokens page.
           </p>
         </>
       ) : (

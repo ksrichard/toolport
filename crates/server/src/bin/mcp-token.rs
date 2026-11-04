@@ -1,13 +1,13 @@
 //! Creates, lists, and revokes MCP client tokens from the command line.
 
-use std::{process::ExitCode, time::Duration};
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use server::{
     auth::jwt::JwtKeys,
     config::parse_jwt_secret,
     error::error_chain,
-    mcp_tokens::{self, DEFAULT_TTL, TokenError},
+    mcp_tokens::{self, DEFAULT_DAYS, MAX_DAYS, TokenError},
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -37,8 +37,11 @@ enum Command {
         #[arg(long)]
         name: String,
         /// Days until the token expires.
-        #[arg(long, default_value_t = DEFAULT_TTL.as_secs() / 86_400)]
-        days: u64,
+        #[arg(long, default_value_t = DEFAULT_DAYS, value_parser = clap::value_parser!(i64).range(1..=MAX_DAYS))]
+        days: i64,
+        /// The token never expires. Only a revoke stops it.
+        #[arg(long, conflicts_with = "days")]
+        never: bool,
     },
     /// List the tokens of a server. The token values are never shown again.
     List {
@@ -85,12 +88,21 @@ async fn run(args: Args) -> Result<(), CliError> {
     sqlx::migrate!("../../migrations").run(&pool).await?;
 
     match args.command {
-        Command::Create { server, name, days } => {
+        Command::Create {
+            server,
+            name,
+            days,
+            never,
+        } => {
             let keys = JwtKeys::new(args.jwt_secret.as_bytes());
-            let ttl = Duration::from_secs(days * 86_400);
+            let days = (!never).then_some(days);
+            let ttl = mcp_tokens::lifetime(days)?;
             let token = mcp_tokens::create(&pool, &keys, &server, &name, ttl).await?;
             println!("token id: {}", token.id);
-            println!("expires:  in {days} days");
+            match days {
+                Some(days) => println!("expires:  in {days} days"),
+                None => println!("expires:  never, only a revoke stops the token"),
+            }
             println!();
             println!("{}", token.value);
             println!();
@@ -110,7 +122,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                     token.id,
                     token.name,
                     token.created_at,
-                    token.expires_at,
+                    token.expires_at.as_deref().unwrap_or("never"),
                     token.last_used_at.as_deref().unwrap_or("never"),
                 );
             }

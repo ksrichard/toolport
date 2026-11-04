@@ -3,7 +3,11 @@
 /**
  * One token row. It never contains the token value.
  */
-export type TokenView = { id: number, name: string, created_ms: number, expires_ms: number, 
+export type TokenView = { id: number, name: string, created_ms: number, 
+/**
+ * `null` for a token that never expires.
+ */
+expires_ms: number | null, 
 /**
  * The server updates it at most once a minute.
  */

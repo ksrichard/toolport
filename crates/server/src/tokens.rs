@@ -13,7 +13,7 @@ use ts_rs::TS;
 use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
-    mcp_tokens::{self, DEFAULT_TTL},
+    mcp_tokens::{self, DEFAULT_DAYS},
     servers::owned_server_id,
     state::AppState,
 };
@@ -22,6 +22,14 @@ use crate::{
 #[ts(export)]
 pub struct CreateToken {
     pub name: String,
+    /// 1 to 365 days. `null` means that the token never expires. A missing field means 90 days.
+    #[serde(default = "default_days")]
+    #[ts(optional, type = "number | null")]
+    pub expires_in_days: Option<i64>,
+}
+
+fn default_days() -> Option<i64> {
+    Some(DEFAULT_DAYS)
 }
 
 /// One token row. It never contains the token value.
@@ -33,8 +41,9 @@ pub struct TokenView {
     pub name: String,
     #[ts(type = "number")]
     pub created_ms: i64,
-    #[ts(type = "number")]
-    pub expires_ms: i64,
+    /// `null` for a token that never expires.
+    #[ts(type = "number | null")]
+    pub expires_ms: Option<i64>,
     /// The server updates it at most once a minute.
     #[ts(type = "number | null")]
     pub last_used_ms: Option<i64>,
@@ -47,8 +56,9 @@ pub struct TokenView {
 #[ts(export)]
 pub struct NewToken {
     pub token: String,
-    #[ts(type = "number")]
-    pub expires_in_days: u64,
+    /// `null` for a token that never expires.
+    #[ts(type = "number | null")]
+    pub expires_in_days: Option<i64>,
     pub row: TokenView,
 }
 
@@ -106,11 +116,11 @@ async fn create_token(
     ApiJson(body): ApiJson<CreateToken>,
 ) -> Result<(StatusCode, Json<NewToken>), ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
-    let created =
-        mcp_tokens::create(&state.pool, &state.auth.jwt, &name, &body.name, DEFAULT_TTL).await?;
+    let ttl = mcp_tokens::lifetime(body.expires_in_days)?;
+    let created = mcp_tokens::create(&state.pool, &state.auth.jwt, &name, &body.name, ttl).await?;
     let token = NewToken {
         token: created.value,
-        expires_in_days: DEFAULT_TTL.as_secs() / 86_400,
+        expires_in_days: body.expires_in_days,
         row: token_view(&state.pool, server_id, created.id).await?,
     };
     Ok((StatusCode::CREATED, Json(token)))

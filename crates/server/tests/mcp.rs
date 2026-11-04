@@ -123,7 +123,7 @@ async fn setup_with(pool: PgPool, timeout_ms: u64, allow_local: bool) -> (Router
 
 async fn token(state: &AppState, server: &str) -> String {
     let ttl = Duration::from_secs(3600);
-    mcp_tokens::create(&state.pool, &state.auth.jwt, server, "test", ttl)
+    mcp_tokens::create(&state.pool, &state.auth.jwt, server, "test", Some(ttl))
         .await
         .unwrap()
         .value
@@ -547,12 +547,12 @@ async fn token_needs_a_known_server_and_a_name(pool: PgPool) {
     let (_, state) = setup(pool.clone(), 10_000).await;
     let ttl = Duration::from_secs(60);
     let keys = &state.auth.jwt;
-    let unknown = mcp_tokens::create(&pool, keys, "nope", "x", ttl).await;
+    let unknown = mcp_tokens::create(&pool, keys, "nope", "x", Some(ttl)).await;
     assert!(matches!(
         unknown,
         Err(mcp_tokens::TokenError::UnknownServer(_))
     ));
-    let empty = mcp_tokens::create(&pool, keys, "pets", "  ", ttl).await;
+    let empty = mcp_tokens::create(&pool, keys, "pets", "  ", Some(ttl)).await;
     assert!(matches!(empty, Err(mcp_tokens::TokenError::EmptyName)));
 }
 
@@ -906,11 +906,11 @@ async fn client_event_goes_only_to_its_own_server(pool: PgPool) {
 
     let ttl = Duration::from_secs(3600);
     let keys = &state.auth.jwt;
-    let pets_token = mcp_tokens::create(&pool, keys, "pets", "pets-token", ttl)
+    let pets_token = mcp_tokens::create(&pool, keys, "pets", "pets-token", Some(ttl))
         .await
         .unwrap()
         .value;
-    let other_token = mcp_tokens::create(&pool, keys, "other", "other-token", ttl)
+    let other_token = mcp_tokens::create(&pool, keys, "other", "other-token", Some(ttl))
         .await
         .unwrap()
         .value;

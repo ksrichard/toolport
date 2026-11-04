@@ -25,7 +25,9 @@ pub struct McpClaims {
     pub jti: String,
     aud: String,
     iat: u64,
-    pub exp: u64,
+    /// `None` for a token that never expires. The JWT then has no `exp` claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exp: Option<u64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,7 +51,9 @@ impl JwtKeys {
         validation.set_audience(&[DASHBOARD_AUDIENCE]);
         let mut mcp_validation = Validation::new(Algorithm::HS256);
         mcp_validation.set_audience(&[MCP_AUDIENCE]);
-        mcp_validation.set_required_spec_claims(&["exp", "aud"]);
+        // An MCP token can have no `exp`, because its DB row decides the expiry and the revoke.
+        // A present `exp` is still checked. The dashboard validation keeps `exp` required.
+        mcp_validation.set_required_spec_claims(&["aud"]);
         Self {
             encoding: EncodingKey::from_secret(secret),
             decoding: DecodingKey::from_secret(secret),
@@ -78,11 +82,12 @@ impl JwtKeys {
             .map_err(|_| AccessTokenError::BadSubject)
     }
 
+    /// A `ttl` of `None` makes a token without `exp`.
     pub fn issue_mcp(
         &self,
         server_id: i64,
         jti: &str,
-        ttl: Duration,
+        ttl: Option<Duration>,
     ) -> Result<McpClaimsAndToken, jsonwebtoken::errors::Error> {
         let now = unix_now();
         let claims = McpClaims {
@@ -90,13 +95,14 @@ impl JwtKeys {
             jti: jti.to_owned(),
             aud: MCP_AUDIENCE.to_owned(),
             iat: now,
-            exp: now + ttl.as_secs(),
+            exp: ttl.map(|ttl| now + ttl.as_secs()),
         };
         let token = jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &self.encoding)?;
         Ok(McpClaimsAndToken { claims, token })
     }
 
-    /// Checks the signature, the audience, and the expiry. The caller must still check the `jti` row.
+    /// Checks the signature, the audience, and the expiry if the token has one.
+    /// The caller must still check the `jti` row.
     pub fn verify_mcp(&self, token: &str) -> Result<McpClaims, jsonwebtoken::errors::Error> {
         jsonwebtoken::decode::<McpClaims>(token, &self.decoding, &self.mcp_validation)
             .map(|data| data.claims)
@@ -126,7 +132,9 @@ mod tests {
     #[test]
     fn mcp_token_round_trip() {
         let keys = keys();
-        let issued = keys.issue_mcp(7, "abc", Duration::from_secs(60)).unwrap();
+        let issued = keys
+            .issue_mcp(7, "abc", Some(Duration::from_secs(60)))
+            .unwrap();
         let claims = keys.verify_mcp(&issued.token).unwrap();
         assert_eq!((claims.srv, claims.jti.as_str()), (7, "abc"));
     }
@@ -136,26 +144,39 @@ mod tests {
         let keys = keys();
         let access = keys.issue_access(1).unwrap();
         assert!(keys.verify_mcp(&access).is_err());
-        let mcp = keys.issue_mcp(1, "abc", Duration::from_secs(60)).unwrap();
+        let mcp = keys
+            .issue_mcp(1, "abc", Some(Duration::from_secs(60)))
+            .unwrap();
         assert!(keys.verify_access(&mcp.token).is_err());
     }
 
     #[test]
     fn expired_mcp_token_is_rejected() {
         let keys = keys();
-        let mut claims = keys.issue_mcp(1, "abc", Duration::ZERO).unwrap().claims;
+        let mut claims = keys
+            .issue_mcp(1, "abc", Some(Duration::ZERO))
+            .unwrap()
+            .claims;
         // Older than the 60 s leeway of the validation.
-        claims.exp -= 120;
+        claims.exp = claims.exp.map(|exp| exp - 120);
         let token =
             jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &keys.encoding).unwrap();
         assert!(keys.verify_mcp(&token).is_err());
     }
 
     #[test]
+    fn mcp_token_without_expiry_is_accepted() {
+        let keys = keys();
+        let issued = keys.issue_mcp(7, "abc", None).unwrap();
+        assert_eq!(issued.claims.exp, None);
+        assert_eq!(keys.verify_mcp(&issued.token).unwrap().exp, None);
+    }
+
+    #[test]
     fn token_from_another_secret_is_rejected() {
         let other = JwtKeys::new(b"another-secret-that-is-at-least-32-chars");
         let token = other
-            .issue_mcp(1, "abc", Duration::from_secs(60))
+            .issue_mcp(1, "abc", Some(Duration::from_secs(60)))
             .unwrap()
             .token;
         assert!(keys().verify_mcp(&token).is_err());

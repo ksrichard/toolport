@@ -3,6 +3,7 @@
 
 import type { ApiView } from './types/ApiView'
 import type { CreateServerWithTool } from './types/CreateServerWithTool'
+import type { CreateToken } from './types/CreateToken'
 import type { ImportApi } from './types/ImportApi'
 import type { ImportedApi } from './types/ImportedApi'
 import type { NewToken } from './types/NewToken'
@@ -122,8 +123,11 @@ export const importApi = (name: string, source: ImportApi) =>
 
 export const getTokens = (name: string) => api<TokenView[]>(`${server(name)}/tokens`)
 
-export const createToken = (name: string, tokenName: string) =>
-  api<NewToken>(`${server(name)}/tokens`, { method: 'POST', body: JSON.stringify({ name: tokenName }) })
+/** Without `expiresInDays`, the server uses 90 days. `null` makes a token that never expires. */
+export const createToken = (name: string, tokenName: string, expiresInDays?: number | null) => {
+  const body: CreateToken = { name: tokenName, expires_in_days: expiresInDays }
+  return api<NewToken>(`${server(name)}/tokens`, { method: 'POST', body: JSON.stringify(body) })
+}
 
 export const revokeToken = (name: string, id: number) =>
   api<TokenView>(`${server(name)}/tokens/${id}/revoke`, { method: 'POST' })

@@ -226,6 +226,7 @@ td.form-cell { white-space: normal; background: var(--panel-2); }
 .toggle input:disabled + span { opacity: .6; }
 :root[data-theme="neon"] .toggle span, :root[data-theme="neon"] .toggle span::after { border-radius: 0; }
 .note { font-size: 12px; color: var(--muted); margin: 0; }
+.rule-note { margin-top: 12px; }
 
 /* onboarding */
 .onboarding { display: grid; gap: 20px; max-width: 1040px; }

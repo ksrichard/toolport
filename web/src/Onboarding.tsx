@@ -6,6 +6,7 @@ import { ToolForm } from './Builder'
 import { snippet, WHERE, type Client } from './clientCommand'
 import { ClientTabs } from './ClientSnippet'
 import { CopyButton } from './CopyButton'
+import { rateLimitShort, useLimits } from './limits'
 import { useLiveStream } from './liveStream'
 import { useSpecSource } from './specSource'
 import { isValidServerName } from './serverName'
@@ -274,6 +275,8 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
   const tools = imported.flatMap((api) => api.tools)
   const toolCount = tools.length > 0 ? tools.length : server.tools
   const skipped = imported.reduce((n, api) => n + api.skipped.length, 0)
+  const limits = useLimits()
+  const limitText = limits ? rateLimitShort(limits) : ''
 
   const newToken = async () => {
     setBusy(true)
@@ -314,7 +317,7 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
           />
           <p className="note">
             The command contains a token. ToolPort shows it only now and does not store it. {lifetimeText(token)} You
-            can revoke it on the Tokens page.
+            can revoke it on the Tokens page.{limitText && ` ${limitText}`}
           </p>
         </>
       ) : (

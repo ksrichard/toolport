@@ -237,6 +237,10 @@ Each milestone ends with working code, tests, and a short demo.
     buckets live in memory, so each server process has its own limits. An hourly job
     (`calls::delete_old_calls`) deletes old call rows in batches of 5000. After the cleanup, a
     server with only old calls shows "never" as its last call on the All servers page.
+    `GET /api/limits` returns `rate_limit_per_minute` and `rate_limit_burst` (both 0 when the
+    limit is off). The limiter computes both values, so they cannot differ from the real limit.
+    The Tokens page shows the rule under the token table. The Connect step of onboarding adds
+    one short sentence. The UI does not show the call retention.
 13. Deploy. Run the same `compose.yaml` on one host with a real `TOOLPORT_DOMAIN`.
     Add a Postgres backup job. Ask before any change to real infrastructure.
 

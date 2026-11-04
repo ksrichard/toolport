@@ -30,13 +30,17 @@
   --radius: 10px; --radius-sm: 6px; --brand-size: 1.15rem; --font-size: 14px;
   color-scheme: light;
 }
+/* Motion tokens. They are the same in every theme. */
+:root {
+  --dur-fast: 150ms; --dur: 200ms; --dur-slow: 250ms;
+  --ease: cubic-bezier(.2, 0, 0, 1); --ease-in-out: cubic-bezier(.4, 0, .2, 1);
+}
 
 * { box-sizing: border-box; }
 body {
   margin: 0; min-height: 100vh; padding: 16px;
   background: var(--bg); color: var(--fg);
   font: var(--font-size)/1.5 var(--f-ui);
-  transition: background .25s, color .25s;
 }
 button { font: inherit; color: inherit; }
 a { color: var(--accent); }
@@ -118,7 +122,6 @@ main { display: grid; gap: 16px; align-content: start; min-width: 0; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pulse 2s infinite; }
 .stream.paused .dot, .stream.connecting .dot, .stream.reconnecting .dot { background: var(--warn); animation: none; }
 .stream.failed .dot { background: var(--bad); animation: none; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
 
 .panel h2 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 12px; }
 .panel h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
@@ -160,8 +163,6 @@ th.num, td.num { text-align: right; }
 tr:last-child td { border-bottom: 0; }
 td .line { justify-content: flex-end; }
 .cell-error { color: var(--bad); white-space: normal; }
-tr.new td { animation: flash 1.2s ease-out; }
-@keyframes flash { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } to { background: transparent; } }
 .method { font: 600 11px var(--f-data); padding: 1px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); }
 :root[data-theme="neon"] .method { border-radius: 0; }
 .pill { font-size: 12px; padding: 1px 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
@@ -185,8 +186,8 @@ tr.new td { animation: flash 1.2s ease-out; }
 .toggle { position: relative; width: 34px; height: 20px; flex: none; }
 .toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
 .toggle input:disabled { cursor: not-allowed; }
-.toggle span { position: absolute; inset: 0; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); transition: background .15s; pointer-events: none; }
-.toggle span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.toggle span { position: absolute; inset: 0; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); pointer-events: none; }
+.toggle span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); }
 .toggle input:checked + span { background: var(--accent); border-color: var(--accent); }
 .toggle input:checked + span::after { transform: translateX(14px); background: var(--accent-ink); }
 .toggle input:disabled + span { opacity: .6; }
@@ -203,7 +204,6 @@ tr.new td { animation: flash 1.2s ease-out; }
 .card {
   display: grid; justify-items: start; align-content: start; gap: 6px; text-align: left; cursor: pointer;
   padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: calc(var(--radius) + 4px);
-  transition: border-color .15s, background .15s, transform .15s;
 }
 .card:hover, .card.selected { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 6%, var(--panel)); }
 .card:hover { transform: translateY(-1px); }
@@ -260,9 +260,6 @@ tr.new td { animation: flash 1.2s ease-out; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .kpi:nth-child(3) { border-left: 0; }
   .kpi:nth-child(n+3) { border-top: 1px solid var(--line); }
-}
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
 /* tool builder */
@@ -367,4 +364,60 @@ tr.new td { animation: flash 1.2s ease-out; }
   .site-main { gap: 40px; }
   .site-hero { padding: 24px 18px; }
   .site-steps, .plans { grid-template-columns: 1fr; }
+}
+
+/* ---- motion ----
+   Enter and exit animations change only opacity and transform. Hover and focus states fade
+   their colors. The list animations (add, remove, move) come from auto-animate, see motion.ts. */
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes pop-in { from { opacity: 0; transform: scale(.97); } }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
+@keyframes flash { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } to { background: transparent; } }
+@keyframes soft-pulse { 50% { opacity: .35; transform: scale(.75); } }
+@keyframes ping { from { transform: scale(1.8); } }
+
+/* Controls */
+.btn, .skins button, .side a, .link, .chip, .endpoint, input, select, textarea, .toggle span, .toggle span::after {
+  transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.btn.primary:hover:not(:disabled) { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.btn.danger:hover:not(:disabled) { border-color: var(--bad); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.side a:hover:not([aria-current="page"]), .skins button:hover:not([aria-pressed="true"]) { color: var(--fg); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent); }
+/* The switch input is invisible, so its track shows the focus ring. */
+.toggle input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card { transition: border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
+
+/* Pages, panels, and messages that appear */
+main { animation: rise-in var(--dur-slow) var(--ease) backwards; }
+.alert, .wizard, .callout, .results, .badge-detail { animation: fade-in var(--dur) var(--ease) backwards; }
+.confirm { animation: pop-in var(--dur) var(--ease) backwards; }
+/* auto-animate already fades in the children of these parents. */
+.motion-list > * { animation: none; }
+
+/* Live call log: a new row gets a short highlight */
+tr.new td { animation: flash 1.2s ease-out; }
+
+/* Onboarding connection badge */
+.badge-card { transition: border-color var(--dur-slow) var(--ease), box-shadow var(--dur-slow) var(--ease); }
+.badge-state, .badge-dot { transition: color var(--dur-slow) var(--ease), background-color var(--dur-slow) var(--ease); }
+.badge-card:not(.connected) .badge-dot { animation: soft-pulse 1.6s var(--ease-in-out) infinite; }
+.badge-card.connected .badge-dot { animation: ping var(--dur-slow) var(--ease) backwards; }
+.badge-card.connected > * { animation: fade-in var(--dur-slow) var(--ease) backwards; }
+
+/* Theme change. Shell.tsx sets the class for a moment, so the first page load does not fade. */
+@media (prefers-reduced-motion: no-preference) {
+  .theme-change, .theme-change *, .theme-change *::before, .theme-change *::after {
+    transition: color var(--dur-slow) var(--ease), background-color var(--dur-slow) var(--ease),
+      border-color var(--dur-slow) var(--ease), box-shadow var(--dur-slow) var(--ease),
+      fill var(--dur-slow) var(--ease), stroke var(--dur-slow) var(--ease) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }

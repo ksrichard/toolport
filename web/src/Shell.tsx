@@ -49,6 +49,16 @@ function saveSelected(name: string) {
   }
 }
 
+/**
+ * Colors fade only during a theme change. A global color transition would also run on the
+ * first page load, when the saved theme replaces the default theme.
+ */
+function fadeTheme() {
+  const root = document.documentElement
+  root.classList.add('theme-change')
+  window.setTimeout(() => root.classList.remove('theme-change'), 300)
+}
+
 /** Routes of the tool builder: /servers/<name>/tools/new and /servers/<name>/tools/<tool>. */
 function builderRoute(path: string): { server: string; tool: string | null } | null {
   const match = /^\/servers\/([^/]+)\/tools\/([^/]+)$/.exec(path)
@@ -106,11 +116,13 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
 
   const changeTheme = async (theme: Theme) => {
     const previous = user.theme
+    fadeTheme()
     onUserChange({ ...user, theme })
     setThemeError(null)
     try {
       await setTheme(theme)
     } catch {
+      fadeTheme()
       onUserChange({ ...user, theme: previous })
       setThemeError('Could not save the theme.')
     }
@@ -295,7 +307,8 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
           </div>
         </nav>
 
-        <main>{content}</main>
+        {/* A new key on each page change restarts the page enter animation. */}
+        <main key={servers ? path : 'loading'}>{content}</main>
       </div>
     </>
   )

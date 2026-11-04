@@ -173,7 +173,6 @@ export function Onboarding({ existing, onCancel, onChanged, onDone }: Onboarding
             </li>
           ))}
         </ol>
-        <span className="eta">~30 s</span>
       </div>
       {onCancel && (
         <button type="button" className="link muted-link" onClick={onCancel}>

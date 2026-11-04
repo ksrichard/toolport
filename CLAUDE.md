@@ -185,6 +185,12 @@ Each milestone ends with working code, tests, and a short demo.
    (`crates/server/templates/`) or an own spec, name the server, copy the client command.
    The tool switches stay read-only until milestone 8. `cargo test` writes the API types to
    `web/src/types/` (ts-rs), and CI fails when they are out of date.
+   The chart (`web/src/CallChart.tsx`) shows the values of a bucket on hover, touch, and the
+   arrow keys. Its window is 5 min, 1 h, 24 h, 7 d, or 30 d, and the browser remembers it. The
+   5 min window uses the 5 s buckets of the SSE stream. The other windows use
+   `GET /api/servers/{name}/calls/series?window=1h|24h|7d|30d`. It returns every bucket, also the
+   empty ones, in buckets of 1 min, 15 min, 1 h, or 6 h. The chart loads it again every 30 s
+   and soon after new calls.
    In the Neon theme, `web/src/PixelScenes.tsx` plays a short pixel-art scene in the free space of
    the page header every 30–60 s. The × button turns the scenes off for this browser.
    Tool builder. Status: done. Pages: `/servers/<name>/tools/new` and

@@ -2,6 +2,7 @@
 // that JavaScript cannot read. The browser sends it only to /auth/*.
 
 import type { ApiView } from './types/ApiView'
+import type { CallSeries } from './types/CallSeries'
 import type { CreateServerWithTool } from './types/CreateServerWithTool'
 import type { CreateToken } from './types/CreateToken'
 import type { ImportApi } from './types/ImportApi'
@@ -14,6 +15,7 @@ import type { SaveApi } from './types/SaveApi'
 import type { SaveTool } from './types/SaveTool'
 import type { ServerSummary } from './types/ServerSummary'
 import type { SetAutoCheck } from './types/SetAutoCheck'
+import type { SeriesWindow } from './types/SeriesWindow'
 import type { SetToolEnabled } from './types/SetToolEnabled'
 import type { Template } from './types/Template'
 import type { Theme } from './types/Theme'
@@ -123,6 +125,9 @@ export const renameServer = (name: string, newName: string) => {
 }
 
 export const deleteServer = (name: string) => api<void>(server(name), { method: 'DELETE' })
+
+export const getCallSeries = (name: string, window: SeriesWindow) =>
+  api<CallSeries>(`${server(name)}/calls/series?window=${window}`)
 
 export const getTools = (name: string) => api<ToolSummary[]>(`${server(name)}/tools`)
 

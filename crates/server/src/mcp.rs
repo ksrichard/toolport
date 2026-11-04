@@ -227,6 +227,7 @@ impl ToolportMcp {
         let call = NewCall {
             server_id: caller.server_id,
             token_id: caller.token_id,
+            token_name: &caller.token_name,
             client_name,
             tool,
             result: outcome.call_result(),

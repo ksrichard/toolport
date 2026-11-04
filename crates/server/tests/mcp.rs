@@ -518,12 +518,19 @@ async fn revoke_stops_an_open_session_at_once(pool: PgPool) {
     let (app, state) = setup(pool.clone(), 10_000).await;
     let client = Client::connect(&app, &state, "pets").await;
     assert_eq!(client.tool_names().await.len(), 4);
+    client.call("getPet", json!({ "id": "1" })).await;
 
     let tokens = mcp_tokens::list(&pool, "pets").await.unwrap();
     assert!(mcp_tokens::revoke(&pool, tokens[0].id).await.unwrap());
     assert_unauthorized(client.send("tools/list", json!({})).await).await;
-    // A second revoke finds no active token.
+    assert!(mcp_tokens::list(&pool, "pets").await.unwrap().is_empty());
+    // A second revoke finds no token.
     assert!(!mcp_tokens::revoke(&pool, tokens[0].id).await.unwrap());
+
+    // The Live snapshot and the call log read `calls::recent`. The call keeps the token name.
+    let calls = calls::recent(&pool, 1, 10).await.unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].token_name.as_deref(), Some("test"));
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -543,7 +550,7 @@ async fn use_of_a_token_sets_last_used(pool: PgPool) {
     let token = token(&state, "pets").await;
     let before = mcp_tokens::list(&pool, "pets").await.unwrap();
     assert_eq!(before[0].last_used_at, None);
-    assert!(!before[0].revoked);
+    assert!(!before[0].expired);
 
     Client::connect_with(&app, "pets", token).await;
     let after = mcp_tokens::list(&pool, "pets").await.unwrap();
@@ -709,6 +716,7 @@ async fn metrics_use_the_last_minute(pool: PgPool) {
         let call = calls::NewCall {
             server_id: 1,
             token_id,
+            token_name: "test",
             client_name: None,
             tool: "getPet",
             result,

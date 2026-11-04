@@ -48,7 +48,7 @@ enum Command {
         #[arg(long)]
         server: String,
     },
-    /// Revoke a token. MCP clients that use it get 401 at once.
+    /// Revoke a token. This deletes the token, and MCP clients that use it get 401 at once.
     Revoke {
         /// The token id from `list`.
         #[arg(long)]
@@ -64,7 +64,7 @@ enum CliError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("the token command failed")]
     Token(#[from] TokenError),
-    #[error("no active token has the id {0}")]
+    #[error("no token has the id {0}")]
     NoSuchToken(i64),
 }
 
@@ -116,7 +116,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                 "ID", "NAME", "CREATED (UTC)", "EXPIRES (UTC)", "LAST USED (UTC)"
             );
             for token in tokens {
-                let state = if token.revoked { "revoked" } else { "active" };
+                let state = if token.expired { "expired" } else { "active" };
                 println!(
                     "{:>5}  {:<20}  {:<16}  {:<16}  {:<16}  {state}",
                     token.id,
@@ -131,7 +131,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             if !mcp_tokens::revoke(&pool, id).await? {
                 return Err(CliError::NoSuchToken(id));
             }
-            println!("token {id} is revoked");
+            println!("token {id} is revoked and deleted");
         }
     }
     Ok(())

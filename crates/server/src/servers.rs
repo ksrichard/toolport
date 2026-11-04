@@ -40,7 +40,7 @@ pub struct ServerSummary {
     pub tools: i64,
     #[ts(type = "number")]
     pub enabled_tools: i64,
-    /// Tokens that are not revoked and not expired.
+    /// Tokens that are not expired.
     #[ts(type = "number")]
     pub active_tokens: i64,
     /// Milliseconds since the Unix epoch. `None` when the server has no saved call.
@@ -180,7 +180,6 @@ async fn summaries(
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id) AS tools,
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id AND t.enabled) AS enabled_tools,
                 (SELECT count(*) FROM mcp_tokens k WHERE k.server_id = s.id
-                    AND k.revoked_at IS NULL
                     AND (k.expires_at IS NULL OR k.expires_at > now())) AS active_tokens,
                 (SELECT (extract(epoch FROM max(c.created_at)) * 1000)::bigint
                     FROM calls c WHERE c.server_id = s.id) AS last_call_ms

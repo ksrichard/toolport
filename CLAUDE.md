@@ -34,8 +34,8 @@ use the same shell, panels, and tokens.
 - Dashboard login: GitHub OAuth only (no passwords). Add other login methods later only if needed.
 - Authorization: JWT (HS256, secret from `JWT_SECRET`). See "Auth" below.
 - MCP clients (milestone 4): each token is a JWT with the server id, a unique `jti`, and its
-  own audience. The server checks that the `jti` row exists and is not revoked, so revoke
-  works at once. The token value shows once, at creation. The DB stores only the `jti`.
+  own audience. The server checks that the `jti` row exists. A revoke deletes the row, so
+  it works at once. The token value shows once, at creation. The DB stores only the `jti`.
   Each token has a lifetime of 1 to 365 days (default 90) or never. A token that never expires has no `exp`.
 - Logs: `tracing` with JSON output.
 - Frontend: React + Vite + TypeScript. Plain CSS with the mockup's CSS variables. No UI kit.
@@ -171,6 +171,8 @@ Each milestone ends with working code, tests, and a short demo.
 4. Tokens. Make MCP clients send a JWT as a bearer token. Check the signature, the expiry,
    and the `jti` row. Show the token value once, at creation. Allow revoke.
    Status: done. The `mcp-token` dev binary also creates, lists, and revokes tokens. A missing token, a bad token, and an unknown server all get the same 401.
+   A revoke deletes the token row. Each call row keeps its own `token_name`, so the call log
+   still shows the name after the token is gone (`calls.token_id` becomes NULL).
 5. Call log and metrics. Save every call. Compute calls per minute, error rate, p50 and
    p95 latency, and open sessions. Send new calls and metrics to the dashboard over SSE.
    Status: done. `GET /api/servers/{name}/live` sends `snapshot`, `call`, and `metrics`
@@ -222,7 +224,8 @@ Each milestone ends with working code, tests, and a short demo.
    The server refuses with `last_enabled_tool` when no enabled tool would remain.
 10. Tokens page. Create, name, and revoke tokens. Show the last use of each token.
     Status: done. `GET`/`POST /api/servers/{name}/tokens` list and create tokens, and
-    `POST /api/servers/{name}/tokens/{id}/revoke` revokes one. Revoked tokens stay in the list.
+    `POST /api/servers/{name}/tokens/{id}/revoke` deletes one (204). Revoked tokens leave the
+    list, and expired tokens stay in it until a revoke.
     The last use updates at most once a minute. The onboarding badge matches its token by id.
     The Create form offers a lifetime select, and the table shows the expiry date, "never", or "expired".
 11. All servers page. Create, rename, and delete servers. Show a short status for each.

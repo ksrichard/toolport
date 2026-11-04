@@ -1,4 +1,4 @@
-//! Dashboard routes for the MCP client tokens of one server: list, create, and revoke.
+//! Dashboard routes for the MCP client tokens of one server: list, create, and revoke (delete).
 
 use axum::{
     Json, Router,
@@ -47,8 +47,6 @@ pub struct TokenView {
     /// The server updates it at most once a minute.
     #[ts(type = "number | null")]
     pub last_used_ms: Option<i64>,
-    #[ts(type = "number | null")]
-    pub revoked_ms: Option<i64>,
 }
 
 /// The only response that contains the token value.
@@ -81,8 +79,7 @@ async fn token_views(
         "SELECT id, name,
                 (extract(epoch FROM created_at) * 1000)::bigint AS created_ms,
                 (extract(epoch FROM expires_at) * 1000)::bigint AS expires_ms,
-                (extract(epoch FROM last_used_at) * 1000)::bigint AS last_used_ms,
-                (extract(epoch FROM revoked_at) * 1000)::bigint AS revoked_ms
+                (extract(epoch FROM last_used_at) * 1000)::bigint AS last_used_ms
          FROM mcp_tokens WHERE server_id = $1 AND ($2::bigint IS NULL OR id = $2)
          ORDER BY id DESC",
     )
@@ -126,28 +123,25 @@ async fn create_token(
     Ok((StatusCode::CREATED, Json(token)))
 }
 
-/// The row stays, so the page can still show the revoked token and its last use.
+/// Deletes the token row. The token stops working at once, and the list no longer shows it.
+/// Old calls keep the token name in their own column.
 async fn revoke_token(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((name, id)): Path<(String, i64)>,
-) -> Result<Json<TokenView>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
-    let revoked = sqlx::query(
-        "UPDATE mcp_tokens SET revoked_at = now()
-         WHERE id = $1 AND server_id = $2 AND revoked_at IS NULL",
-    )
-    .bind(id)
-    .bind(server_id)
-    .execute(&state.pool)
-    .await
-    .map_err(ApiError::Database)?
-    .rows_affected()
-        > 0;
-    // A token of another server gives NotFound here, the same as an unknown id.
-    let view = token_view(&state.pool, server_id, id).await?;
-    if !revoked {
-        return Err(ApiError::TokenAlreadyRevoked);
+    // A token of another server gives NotFound, the same as an unknown id.
+    let deleted = sqlx::query("DELETE FROM mcp_tokens WHERE id = $1 AND server_id = $2")
+        .bind(id)
+        .bind(server_id)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::Database)?
+        .rows_affected();
+    if deleted == 0 {
+        return Err(ApiError::NotFound);
     }
-    Ok(Json(view))
+    state.live.forget_token(id);
+    Ok(StatusCode::NO_CONTENT)
 }

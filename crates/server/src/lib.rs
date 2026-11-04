@@ -33,6 +33,7 @@ pub fn app(state: AppState) -> Router {
         .merge(tools::routes())
         .merge(tokens::routes())
         .merge(spec_check::routes())
+        .merge(rate_limit::routes())
         .fallback(|| async { ApiError::NotFound });
     Router::new()
         .nest("/api", api)

@@ -6,7 +6,12 @@
 
 use std::{collections::HashMap, sync::Mutex, time::Duration};
 
+use axum::{Json, Router, extract::State, routing::get};
+use serde::Serialize;
 use tokio::time::Instant;
+use ts_rs::TS;
+
+use crate::{auth::AuthUser, state::AppState};
 
 /// Time between two removals of idle buckets.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
@@ -17,7 +22,16 @@ pub struct RateLimited {
     pub retry_after_secs: u64,
 }
 
+/// The limit as the dashboard shows it. Both values are 0 when the limit is off.
+#[derive(Debug, Clone, Copy, Serialize, TS)]
+#[ts(export)]
+pub struct Limits {
+    pub rate_limit_per_minute: u32,
+    pub rate_limit_burst: u32,
+}
+
 pub struct RateLimiter {
+    limits: Limits,
     /// `None` when the limit is off.
     rate: Option<Rate>,
     state: Mutex<Buckets>,
@@ -42,17 +56,26 @@ struct Bucket {
 impl RateLimiter {
     /// `per_minute = 0` turns the limit off. The burst is the calls of 10 seconds, at least 1.
     pub fn new(per_minute: u32) -> Self {
+        let burst = per_minute.div_ceil(6);
         let rate = (per_minute > 0).then(|| Rate {
-            burst: per_minute.div_ceil(6) as f64,
+            burst: f64::from(burst),
             per_sec: f64::from(per_minute) / 60.0,
         });
         Self {
+            limits: Limits {
+                rate_limit_per_minute: per_minute,
+                rate_limit_burst: burst,
+            },
             rate,
             state: Mutex::new(Buckets {
                 by_token: HashMap::new(),
                 last_prune: Instant::now(),
             }),
         }
+    }
+
+    pub fn limits(&self) -> Limits {
+        self.limits
     }
 
     /// Takes one call from the bucket of the token, or tells how long to wait.
@@ -98,6 +121,14 @@ impl RateLimiter {
             .by_token
             .len()
     }
+}
+
+pub fn routes() -> Router<AppState> {
+    Router::new().route("/limits", get(limits))
+}
+
+async fn limits(State(state): State<AppState>, _auth: AuthUser) -> Json<Limits> {
+    Json(state.rate_limit.limits())
 }
 
 impl Bucket {
@@ -176,6 +207,15 @@ mod tests {
         let limiter = RateLimiter::new(60);
         assert_eq!(take(&limiter, 1, 20), 10);
         assert_eq!(take(&limiter, 2, 20), 10);
+    }
+
+    #[test]
+    fn limits_match_the_bucket() {
+        let limits = RateLimiter::new(60).limits();
+        assert_eq!(limits.rate_limit_per_minute, 60);
+        assert_eq!(limits.rate_limit_burst, 10);
+        assert_eq!(RateLimiter::new(1).limits().rate_limit_burst, 1);
+        assert_eq!(RateLimiter::new(0).limits().rate_limit_burst, 0);
     }
 
     #[tokio::test(start_paused = true)]

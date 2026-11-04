@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ApiError, createToken, getTokens, revokeToken } from './api'
 import { ClientSnippet } from './ClientSnippet'
 import { CopyButton } from './CopyButton'
+import { rateLimitRule, useLimits } from './limits'
 import { useListAnimation } from './motion'
 import type { NewToken } from './types/NewToken'
 import type { ServerSummary } from './types/ServerSummary'
@@ -46,6 +47,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
   const [created, setCreated] = useState<NewToken | null>(null)
   const [now, setNow] = useState(Date.now)
   const rowsRef = useListAnimation<HTMLTableSectionElement>()
+  const limits = useLimits()
 
   const load = useCallback(() => {
     getTokens(server.name).then(
@@ -133,6 +135,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
             </table>
           </div>
         )}
+        {limits && <p className="note rule-note">{rateLimitRule(limits)}</p>}
       </section>
     </>
   )

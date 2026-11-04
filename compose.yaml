@@ -26,6 +26,7 @@ services:
       DATABASE_URL: postgres://toolport:${POSTGRES_PASSWORD}@postgres:5432/toolport
       RUST_LOG: ${RUST_LOG:-info}
       UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-10000}
+      SPEC_CHECK_INTERVAL_SECS: ${SPEC_CHECK_INTERVAL_SECS:-3600}
       PUBLIC_URL: https://${TOOLPORT_DOMAIN:-localhost}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env}

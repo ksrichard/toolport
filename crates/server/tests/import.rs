@@ -14,6 +14,7 @@ fn petstore<'a>(server: &'a str, api_name: Option<&'a str>) -> ImportRequest<'a>
         api_name,
         spec_text: PETSTORE,
         base_url: Some(Url::parse("https://petstore3.swagger.io/api/v3").unwrap()),
+        spec_url: None,
     }
 }
 

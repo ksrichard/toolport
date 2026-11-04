@@ -62,6 +62,15 @@ pub struct ApiView {
     pub kind: String,
     pub base_url: String,
     pub auth: AuthView,
+    /// Set when the spec came from a URL.
+    pub spec_url: Option<String>,
+    pub auto_check: bool,
+    #[ts(type = "number | null")]
+    pub last_check_ms: Option<i64>,
+    /// `unchanged`, `updated`, or `failed`.
+    pub last_check_result: Option<String>,
+    #[ts(type = "number")]
+    pub tool_count: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -447,21 +456,52 @@ fn check_base_url(text: &str) -> Result<String, ApiError> {
     Ok(url.to_string())
 }
 
-type ApiRow = (i64, String, String, String, String, Option<String>, bool);
+#[derive(sqlx::FromRow)]
+struct ApiRow {
+    id: i64,
+    name: String,
+    kind: String,
+    base_url: String,
+    auth_type: String,
+    auth_header: Option<String>,
+    secret_set: bool,
+    spec_url: Option<String>,
+    auto_check: bool,
+    last_check_ms: Option<i64>,
+    last_check_result: Option<String>,
+    tool_count: i64,
+}
+
+/// `concat!` takes only literals.
+macro_rules! api_select {
+    () => {
+        "SELECT a.id, a.name, a.kind, a.base_url, a.auth_type, a.auth_header,
+                (a.auth_secret IS NOT NULL) AS secret_set, a.spec_url, a.auto_check,
+                (extract(epoch FROM a.last_check_at) * 1000)::bigint AS last_check_ms,
+                a.last_check_result,
+                (SELECT count(*) FROM tools t WHERE t.api_id = a.id) AS tool_count
+         FROM apis a "
+    };
+}
 
 fn view(row: ApiRow) -> ApiView {
-    let (id, name, kind, base_url, auth_type, header, secret_set) = row;
-    let auth = match (auth_type.as_str(), header) {
+    let secret_set = row.secret_set;
+    let auth = match (row.auth_type.as_str(), row.auth_header) {
         ("api_key", Some(header)) => AuthView::ApiKey { header, secret_set },
         ("bearer", _) => AuthView::Bearer { secret_set },
         _ => AuthView::None,
     };
     ApiView {
-        id,
-        name,
-        kind,
-        base_url,
+        id: row.id,
+        name: row.name,
+        kind: row.kind,
+        base_url: row.base_url,
         auth,
+        spec_url: row.spec_url,
+        auto_check: row.auto_check,
+        last_check_ms: row.last_check_ms,
+        last_check_result: row.last_check_result,
+        tool_count: row.tool_count,
     }
 }
 
@@ -471,10 +511,10 @@ async fn list_apis(
     Path(name): Path<String>,
 ) -> Result<Json<Vec<ApiView>>, ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
-    let rows: Vec<ApiRow> = sqlx::query_as(
-        "SELECT id, name, kind, base_url, auth_type, auth_header, (auth_secret IS NOT NULL)
-         FROM apis WHERE server_id = $1 ORDER BY id",
-    )
+    let rows: Vec<ApiRow> = sqlx::query_as(concat!(
+        api_select!(),
+        "WHERE a.server_id = $1 ORDER BY a.id"
+    ))
     .bind(server_id)
     .fetch_all(&state.pool)
     .await
@@ -549,15 +589,12 @@ async fn insert_manual_api(
     Ok(id)
 }
 
-async fn api_view(pool: &PgPool, id: i64) -> Result<ApiView, ApiError> {
-    let row: ApiRow = sqlx::query_as(
-        "SELECT id, name, kind, base_url, auth_type, auth_header, (auth_secret IS NOT NULL)
-         FROM apis WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(ApiError::Database)?;
+pub(crate) async fn api_view(pool: &PgPool, id: i64) -> Result<ApiView, ApiError> {
+    let row: ApiRow = sqlx::query_as(concat!(api_select!(), "WHERE a.id = $1"))
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(ApiError::Database)?;
     Ok(view(row))
 }
 

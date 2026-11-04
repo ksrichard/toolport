@@ -8,15 +8,13 @@ import { ClientTabs } from './ClientSnippet'
 import { CopyButton } from './CopyButton'
 import { useLiveStream } from './liveStream'
 import { useSpecSource } from './specSource'
+import { isValidServerName } from './serverName'
 import { SpecSourceFields } from './SpecSourceFields'
 import type { ImportApi } from './types/ImportApi'
 import type { ImportedApi } from './types/ImportedApi'
 import type { NewToken } from './types/NewToken'
 import type { ServerSummary } from './types/ServerSummary'
 import type { Template } from './types/Template'
-
-// The same rule as `is_valid_server_name` in crates/core/src/server_name.rs.
-const SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/
 
 /** Token names need not be unique. The date tells two onboarding tokens apart on the Tokens page. */
 const tokenName = () => `first-client ${new Date().toISOString().slice(0, 10)}`
@@ -200,7 +198,7 @@ function NameStep({ choice, existing, onBack, onCreated, onImported }: NameStepP
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const nameValid = SERVER_NAME.test(name)
+  const nameValid = isValidServerName(name)
   const specReady = choice.kind === 'template' || spec.ready
 
   const source = (): ImportApi =>

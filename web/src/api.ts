@@ -9,6 +9,7 @@ import type { ImportedApi } from './types/ImportedApi'
 import type { NewToken } from './types/NewToken'
 import type { ReimportApi } from './types/ReimportApi'
 import type { RemovedApi } from './types/RemovedApi'
+import type { RenameServer } from './types/RenameServer'
 import type { SaveApi } from './types/SaveApi'
 import type { SaveTool } from './types/SaveTool'
 import type { ServerSummary } from './types/ServerSummary'
@@ -115,6 +116,13 @@ export const getServers = () => api<ServerSummary[]>('/api/servers')
 
 export const createServer = (name: string) =>
   api<ServerSummary>('/api/servers', { method: 'POST', body: JSON.stringify({ name }) })
+
+export const renameServer = (name: string, newName: string) => {
+  const body: RenameServer = { name: newName }
+  return api<ServerSummary>(server(name), { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export const deleteServer = (name: string) => api<void>(server(name), { method: 'DELETE' })
 
 export const getTools = (name: string) => api<ToolSummary[]>(`${server(name)}/tools`)
 

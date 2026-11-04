@@ -12,9 +12,9 @@ use reqwest::Url;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, Extensions, Implementation,
-        JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
-        Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Extensions,
+        Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
+        ServerConfig, Tool,
     },
     service::{NotificationContext, Peer, RequestContext},
     transport::streamable_http_server::{
@@ -30,6 +30,7 @@ use crate::{
     error::{ApiError, error_chain},
     live::{CallEvent, FirstRequest, LiveHub},
     mcp_tokens::{self, AuthorizeError, McpCaller},
+    rate_limit::RateLimiter,
     secrets::{SecretsError, SecretsKey},
     sessions::SessionPeers,
     state::AppState,
@@ -86,13 +87,15 @@ pub async fn authorize(
 
 #[derive(Clone)]
 pub struct ToolportMcp {
-    pool: PgPool,
-    http: reqwest::Client,
-    secrets: Arc<SecretsKey>,
-    allow_local_upstream: bool,
-    upstream_timeout: Duration,
-    live: Arc<LiveHub>,
-    peers: Arc<SessionPeers>,
+    pub pool: PgPool,
+    /// The guarded upstream client.
+    pub http: reqwest::Client,
+    pub secrets: Arc<SecretsKey>,
+    pub allow_local_upstream: bool,
+    pub upstream_timeout: Duration,
+    pub live: Arc<LiveHub>,
+    pub peers: Arc<SessionPeers>,
+    pub rate_limit: Arc<RateLimiter>,
 }
 
 /// Errors that stop a tool call before ToolPort sends the upstream request.
@@ -140,26 +143,6 @@ impl From<CallError> for McpError {
 }
 
 impl ToolportMcp {
-    pub fn new(
-        pool: PgPool,
-        http: reqwest::Client,
-        secrets: Arc<SecretsKey>,
-        allow_local_upstream: bool,
-        upstream_timeout: Duration,
-        live: Arc<LiveHub>,
-        peers: Arc<SessionPeers>,
-    ) -> Self {
-        Self {
-            pool,
-            http,
-            secrets,
-            allow_local_upstream,
-            upstream_timeout,
-            live,
-            peers,
-        }
-    }
-
     /// Remembers the session, so a tool change can notify it, and a rename or a delete of
     /// the server can close it.
     fn register_peer(&self, caller: &McpCaller, extensions: &Extensions, peer: &Peer<RoleServer>) {
@@ -326,6 +309,18 @@ impl ServerHandler for ToolportMcp {
         let client = client_name(&context);
         if self.live.seen(&caller, client.as_deref()) {
             self.announce(&caller, client.clone(), "tools/call", None);
+        }
+        // A refused call is a tool error and not a JSON-RPC error, so the model reads the
+        // wait time. It is not saved in the call log, so a flood of calls does not fill the DB.
+        if let Err(limited) = self.rate_limit.check(caller.token_id) {
+            tracing::info!(
+                server = %caller.server_name,
+                token_id = caller.token_id,
+                tool = %request.name,
+                retry_after_secs = limited.retry_after_secs,
+                "MCP tool call rate limited",
+            );
+            return Ok(CallToolResult::error(vec![ContentBlock::text(limited.to_string())]).into());
         }
         let args = request.arguments.unwrap_or_default();
         let result = self

@@ -6,6 +6,7 @@ pub mod import;
 pub mod live;
 pub mod mcp;
 pub mod mcp_tokens;
+pub mod rate_limit;
 pub mod secrets;
 pub mod servers;
 pub mod sessions;

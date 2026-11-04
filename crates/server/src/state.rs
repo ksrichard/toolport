@@ -10,6 +10,7 @@ use crate::{
     error::StartupError,
     live::LiveHub,
     mcp::{self, McpService, ToolportMcp},
+    rate_limit::RateLimiter,
     secrets::SecretsKey,
     sessions::SessionPeers,
     upstream_guard,
@@ -65,15 +66,16 @@ impl AppState {
         let live = Arc::new(LiveHub::default());
         let peers = Arc::new(SessionPeers::default());
         let upstream_timeout = Duration::from_millis(config.upstream_timeout_ms);
-        let handler = ToolportMcp::new(
-            pool.clone(),
-            upstream.clone(),
-            secrets.clone(),
-            config.allow_local_upstream,
+        let handler = ToolportMcp {
+            pool: pool.clone(),
+            http: upstream.clone(),
+            secrets: secrets.clone(),
+            allow_local_upstream: config.allow_local_upstream,
             upstream_timeout,
-            live.clone(),
-            peers.clone(),
-        );
+            live: live.clone(),
+            peers: peers.clone(),
+            rate_limit: Arc::new(RateLimiter::new(config.rate_limit_per_minute)),
+        };
         let mcp_sessions = Arc::new(LocalSessionManager::default());
         Ok(Self {
             live,

@@ -15,6 +15,7 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use server::{
     calls::{self, CallResult},
+    config::Config,
     import::{ImportRequest, Owner, import_spec},
     mcp_tokens,
     secrets::{SecretsKey, seal},
@@ -112,11 +113,18 @@ async fn setup(pool: PgPool, timeout_ms: u64) -> (Router, AppState) {
 }
 
 async fn setup_with(pool: PgPool, timeout_ms: u64, allow_local: bool) -> (Router, AppState) {
+    setup_config(pool, |config| {
+        config.upstream_timeout_ms = timeout_ms;
+        config.allow_local_upstream = allow_local;
+    })
+    .await
+}
+
+async fn setup_config(pool: PgPool, change: impl FnOnce(&mut Config)) -> (Router, AppState) {
     common::create_user(&pool, 1, "octocat").await;
     import(&pool, "pets", UPSTREAM_SPEC, fake_upstream().await).await;
     let mut config = common::config(&common::fake_github().await);
-    config.upstream_timeout_ms = timeout_ms;
-    config.allow_local_upstream = allow_local;
+    change(&mut config);
     let state = AppState::new(pool, &config).unwrap();
     (server::app(state.clone()), state)
 }
@@ -582,6 +590,55 @@ async fn each_call_is_saved(pool: PgPool) {
     assert_eq!(calls[0].client_name.as_deref(), Some("test"));
     assert_eq!(calls[0].token_name.as_deref(), Some("test"));
     assert!(calls[0].latency_ms >= 200);
+}
+
+/// 12 calls per minute give a burst of 2 calls.
+async fn setup_rate_limit(pool: PgPool, per_minute: u32) -> (Router, AppState) {
+    setup_config(pool, |config| config.rate_limit_per_minute = per_minute).await
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn calls_over_the_rate_limit_are_refused(pool: PgPool) {
+    let (app, state) = setup_rate_limit(pool.clone(), 12).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    for _ in 0..2 {
+        let result = client.call("getPet", json!({ "id": "1" })).await;
+        assert_eq!(result["isError"], false);
+    }
+    let refused = client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(refused["isError"], true);
+    assert_eq!(text(&refused), "rate limit exceeded, retry in 5 s");
+    // The refused call never reaches the upstream API, so it is not saved.
+    assert_eq!(calls::recent(&pool, 1, 10).await.unwrap().len(), 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn each_token_has_its_own_rate_limit(pool: PgPool) {
+    let (app, state) = setup_rate_limit(pool, 6).await;
+    let first = Client::connect(&app, &state, "pets").await;
+    let second = Client::connect(&app, &state, "pets").await;
+    assert_eq!(
+        first.call("getPet", json!({ "id": "1" })).await["isError"],
+        false
+    );
+    assert_eq!(
+        first.call("getPet", json!({ "id": "1" })).await["isError"],
+        true
+    );
+    assert_eq!(
+        second.call("getPet", json!({ "id": "1" })).await["isError"],
+        false
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn zero_turns_the_rate_limit_off(pool: PgPool) {
+    let (app, state) = setup_rate_limit(pool, 0).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    for _ in 0..30 {
+        let result = client.call("getPet", json!({ "id": "1" })).await;
+        assert_eq!(result["isError"], false);
+    }
 }
 
 #[sqlx::test(migrations = "../../migrations")]

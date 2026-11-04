@@ -289,6 +289,8 @@ tr.new td { animation: flash 1.2s ease-out; }
 .builder input[readonly], .builder textarea[readonly] { opacity: .7; }
 .builder [aria-invalid="true"] { border-color: var(--bad); }
 .btn.add { justify-self: start; }
+.stack { display: grid; gap: 6px; }
+.stack:empty { display: none; }
 .btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); }
 .inputs td, .inputs th { padding: 4px 4px; border-bottom: 0; }
 .inputs input:not([type="checkbox"]) { width: 100%; min-width: 7rem; }

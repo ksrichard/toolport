@@ -1,5 +1,6 @@
 // Tools page: every tool of the server, grouped by API, with on/off switches.
 
+import { useListAnimation } from './motion'
 import { ToolSwitch } from './ToolSwitch'
 import { useToolList, type ToolList } from './toolList'
 import type { ToolSummary } from './types/ToolSummary'
@@ -54,18 +55,33 @@ export function Tools({ server, navigate, onChanged }: ToolsProps) {
       )}
 
       {[...groups].map(([api, apiTools]) => (
-        <section className="panel" key={api}>
-          <h2>
-            {api} <small>{apiTools.filter((t) => t.enabled).length} of {apiTools.length} on</small>
-          </h2>
-          <ul className="list tool-rows">
-            {apiTools.map((t) => (
-              <ToolRow key={t.name} tool={t} list={list} href={toolUrl(t.name)} navigate={navigate} />
-            ))}
-          </ul>
-        </section>
+        <ToolGroup key={api} api={api} tools={apiTools} list={list} toolUrl={toolUrl} navigate={navigate} />
       ))}
     </>
+  )
+}
+
+interface ToolGroupProps {
+  api: string
+  tools: ToolSummary[]
+  list: ToolList
+  toolUrl: (tool: string) => string
+  navigate: (path: string) => void
+}
+
+function ToolGroup({ api, tools, list, toolUrl, navigate }: ToolGroupProps) {
+  const listRef = useListAnimation<HTMLUListElement>()
+  return (
+    <section className="panel">
+      <h2>
+        {api} <small>{tools.filter((t) => t.enabled).length} of {tools.length} on</small>
+      </h2>
+      <ul className="list tool-rows" ref={listRef}>
+        {tools.map((t) => (
+          <ToolRow key={t.name} tool={t} list={list} href={toolUrl(t.name)} navigate={navigate} />
+        ))}
+      </ul>
+    </section>
   )
 }
 

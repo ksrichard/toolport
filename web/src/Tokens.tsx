@@ -12,6 +12,17 @@ import type { TokenView } from './types/TokenView'
 // The same limit as `MAX_NAME_CHARS` in crates/server/src/mcp_tokens.rs.
 const MAX_NAME_CHARS = 64
 
+// The server accepts 1 to 365 days, or null for never. Onboarding keeps the server default of 90 days.
+const LIFETIMES: { value: string; days: number | null; label: string }[] = [
+  { value: '7', days: 7, label: '7 days' },
+  { value: '30', days: 30, label: '30 days' },
+  { value: '90', days: 90, label: '90 days' },
+  { value: '180', days: 180, label: '180 days' },
+  { value: '365', days: 365, label: '1 year' },
+  { value: 'never', days: null, label: 'Never expires' },
+]
+const DEFAULT_LIFETIME = '90'
+
 const message = (error: unknown) => (error instanceof ApiError || error instanceof Error ? error.message : String(error))
 
 function relative(ms: number, now: number): string {
@@ -114,6 +125,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
                 <tr>
                   <th>Name</th>
                   <th>Created</th>
+                  <th>Expires</th>
                   <th>Last use</th>
                   <th>Status</th>
                   <th />
@@ -162,6 +174,15 @@ function TokenRow({ server, token, now, onRevoked }: TokenRowProps) {
     <tr>
       <td className="mono">{token.name}</td>
       <td title={new Date(token.created_ms).toLocaleString()}>{new Date(token.created_ms).toLocaleDateString()}</td>
+      <td title={token.expires_ms === null ? undefined : new Date(token.expires_ms).toLocaleString()}>
+        {token.expires_ms === null ? (
+          <span className="muted">never</span>
+        ) : token.expires_ms <= now ? (
+          <span className="warn-text">expired</span>
+        ) : (
+          new Date(token.expires_ms).toLocaleDateString()
+        )}
+      </td>
       <td title={token.last_used_ms === null ? undefined : new Date(token.last_used_ms).toLocaleString()}>
         {token.last_used_ms === null ? <span className="muted">never</span> : relative(token.last_used_ms, now)}
       </td>
@@ -203,6 +224,7 @@ interface CreateTokenProps {
 
 function CreateToken({ server, onCancel, onCreated }: CreateTokenProps) {
   const [name, setName] = useState('')
+  const [lifetime, setLifetime] = useState(DEFAULT_LIFETIME)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const trimmed = name.trim()
@@ -214,7 +236,8 @@ function CreateToken({ server, onCancel, onCreated }: CreateTokenProps) {
     setBusy(true)
     setError(null)
     try {
-      onCreated(await createToken(server, trimmed))
+      const days = LIFETIMES.find((l) => l.value === lifetime)?.days ?? null
+      onCreated(await createToken(server, trimmed, days))
     } catch (e) {
       setError(message(e))
     } finally {
@@ -239,6 +262,21 @@ function CreateToken({ server, onCancel, onCreated }: CreateTokenProps) {
         <small className={tooLong ? 'bad' : undefined}>
           Name the client or the device that uses the token. Use at most {MAX_NAME_CHARS} characters.
         </small>
+      </label>
+      <label className="field">
+        <span>Lifetime</span>
+        <select value={lifetime} onChange={(e) => setLifetime(e.target.value)} disabled={busy}>
+          {LIFETIMES.map((l) => (
+            <option key={l.value} value={l.value}>
+              {l.label}
+            </option>
+          ))}
+        </select>
+        {lifetime === 'never' && (
+          <small className="warn" role="note">
+            The token stays valid until you revoke it.
+          </small>
+        )}
       </label>
       {error && (
         <p className="alert" role="alert">

@@ -38,6 +38,8 @@ use the same shell, panels, and tokens.
   works at once. The token value shows once, at creation. The DB stores only the `jti`.
 - Logs: `tracing` with JSON output.
 - Frontend: React + Vite + TypeScript. Plain CSS with the mockup's CSS variables. No UI kit.
+  `@formkit/auto-animate` animates items that lists add, remove, and move. It is small and has no
+  dependencies. All other animations are plain CSS.
 - Shared types: `ts-rs` generates TypeScript types from the Rust API types.
   The preview rules have a shared fixture, `crates/core/tests/fixtures/preview.json`. A Rust test
   and `npm run check:preview` both check it.

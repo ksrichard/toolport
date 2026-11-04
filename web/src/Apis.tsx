@@ -7,6 +7,7 @@ import { ApiError, getApis, getTemplates, importApi, reimportApi, removeApi, set
 import { authOf, isApiDirty, saveApiEdit, type AuthState } from './apiAuth'
 import { AuthFields } from './AuthFields'
 import { Row } from './Builder'
+import { useListAnimation } from './motion'
 import { readSpecFile, useSpecSource } from './specSource'
 import { SpecSourceFields } from './SpecSourceFields'
 import type { ApiView } from './types/ApiView'
@@ -26,6 +27,7 @@ export function Apis({ server, onChanged }: ApisProps) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [report, setReport] = useState<{ title: string; apis: ImportedApi[] } | null>(null)
+  const listRef = useListAnimation<HTMLDivElement>()
 
   const load = useCallback(() => {
     getApis(server).then(
@@ -45,7 +47,7 @@ export function Apis({ server, onChanged }: ApisProps) {
   }
 
   return (
-    <div className="builder">
+    <div className="builder motion-list" ref={listRef}>
       <div className="head">
         <div>
           <h1>APIs</h1>
@@ -211,7 +213,7 @@ function ApiCard({ server, api, onSaved, onReimported, onRemoved }: ApiCardProps
         </Row>
       )}
       {confirmRemove && (
-        <div className="actions">
+        <div className="actions confirm">
           <span className="muted">
             Remove {api.name} and its {toolCount}? Open MCP sessions lose these tools. The call log stays.
           </span>

@@ -1,7 +1,7 @@
 // Tool builder. The left side edits a tool. The right side shows the JSON that Claude gets
 // from tools/list. The Test section runs the draft and shows the MCP result and the raw HTTP.
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ApiError,
   createManualApi,
@@ -19,6 +19,7 @@ import {
 import { authInput, authOf, isApiDirty, saveApiEdit, type AuthState } from './apiAuth'
 import { AuthFields } from './AuthFields'
 import { parseQueryTemplate, pathPlaceholders, schemaFromRows, toolJson } from './inputs'
+import { useListAnimation } from './motion'
 import type { ApiView } from './types/ApiView'
 import type { HeaderRow } from './types/HeaderRow'
 import type { HttpMethod } from './types/HttpMethod'
@@ -194,6 +195,10 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
     draft0?.body_schema === undefined || draft0.body_schema === null ? '' : JSON.stringify(draft0.body_schema, null, 2),
   )
   const [rows, setRows] = useState<InputRow[]>(draft0?.inputs ?? [])
+  const headerKeys = useRowKeys(headers.length)
+  const rowKeys = useRowKeys(rows.length)
+  const headersRef = useListAnimation<HTMLDivElement>()
+  const rowsRef = useListAnimation<HTMLTableSectionElement>()
 
   const [apis, setApis] = useState<ApiView[] | null>(server === null ? [] : null)
   const [apiId, setApiId] = useState<number | null>(initial?.api_id ?? null)
@@ -202,6 +207,8 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
 
   const [samples, setSamples] = useState<Record<string, string>>({})
   const [result, setResult] = useState<TestResult | null>(null)
+  // Each test run remounts the result, so a new result fades in also when it looks the same.
+  const [testRuns, setTestRuns] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -380,6 +387,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
         manual_tool: isSpec ? undefined : stored,
       }
       setResult(server === null ? await testDraftTool(request) : await testTool(server, request))
+      setTestRuns((n) => n + 1)
     })
 
   // ---- row helpers ----
@@ -469,19 +477,36 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
           </Row>
 
           <Row label="headers">
-            {headers.map((h, i) => (
-              <div className="line" key={i}>
-                <input className="grow" value={h.name} onChange={(e) => patchHeader(i, { name: e.target.value })} readOnly={isSpec} placeholder="Accept" aria-label="Header name" />
-                <input className="grow" value={h.value} onChange={(e) => patchHeader(i, { value: e.target.value })} readOnly={isSpec} placeholder="application/json or {input}" aria-label="Header value" />
-                {!isSpec && (
-                  <button className="btn" type="button" onClick={() => setHeaders(headers.filter((_, j) => j !== i))} aria-label="Remove header">
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
+            <div className="stack" ref={headersRef}>
+              {headers.map((h, i) => (
+                <div className="line" key={headerKeys.keys[i]}>
+                  <input className="grow" value={h.name} onChange={(e) => patchHeader(i, { name: e.target.value })} readOnly={isSpec} placeholder="Accept" aria-label="Header name" />
+                  <input className="grow" value={h.value} onChange={(e) => patchHeader(i, { value: e.target.value })} readOnly={isSpec} placeholder="application/json or {input}" aria-label="Header value" />
+                  {!isSpec && (
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={() => {
+                        setHeaders(headers.filter((_, j) => j !== i))
+                        headerKeys.remove(i)
+                      }}
+                      aria-label="Remove header"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
             {!isSpec && (
-              <button className="btn add" type="button" onClick={() => setHeaders([...headers, { name: '', value: '' }])}>
+              <button
+                className="btn add"
+                type="button"
+                onClick={() => {
+                  setHeaders([...headers, { name: '', value: '' }])
+                  headerKeys.add()
+                }}
+              >
                 Add header
               </button>
             )}
@@ -519,13 +544,13 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                     <th />
                   </tr>
                 </thead>
-                <tbody>
+                <tbody ref={rowsRef}>
                   {rows.map((r, i) => {
                     const complex = r.input_type === 'complex'
                     const fixed = isSpec && complex
                     const inPath = isSpec && pathNames.includes(r.name)
                     return (
-                      <tr key={i}>
+                      <tr key={rowKeys.keys[i]}>
                         <td>
                           <input value={r.name} onChange={(e) => patchRow(i, { name: e.target.value })} readOnly={isSpec || complex} aria-label="Input name" />
                         </td>
@@ -544,7 +569,15 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                         </td>
                         <td>
                           {!isSpec && (
-                            <button className="btn" type="button" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label="Remove input">
+                            <button
+                              className="btn"
+                              type="button"
+                              onClick={() => {
+                                setRows(rows.filter((_, j) => j !== i))
+                                rowKeys.remove(i)
+                              }}
+                              aria-label="Remove input"
+                            >
                               ×
                             </button>
                           )}
@@ -557,7 +590,14 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
             </div>
             {badName && <small className="bad">{inputNameMessage(badName.name)}</small>}
             {!isSpec && (
-              <button className="btn add" type="button" onClick={() => setRows([...rows, { name: '', input_type: 'string', required: true, description: '' }])}>
+              <button
+                className="btn add"
+                type="button"
+                onClick={() => {
+                  setRows([...rows, { name: '', input_type: 'string', required: true, description: '' }])
+                  rowKeys.add()
+                }}
+              >
                 Add input
               </button>
             )}
@@ -618,7 +658,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       </section>
 
       {result && (
-        <div className="builder-grid results">
+        <div className="builder-grid results" key={testRuns}>
           <section className="panel">
             <h2>MCP result</h2>
             <Json value={result.mcp} />
@@ -634,6 +674,23 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       )}
     </div>
   )
+}
+
+/**
+ * Stable React keys for rows that the user adds and removes. Index keys would make the list
+ * animation fade out the last row when the user removes a row in the middle.
+ */
+function useRowKeys(initial: number) {
+  const next = useRef(initial)
+  const [keys, setKeys] = useState(() => Array.from({ length: initial }, (_, i) => i))
+  return {
+    keys,
+    add: () => {
+      const key = next.current++
+      setKeys((list) => [...list, key])
+    },
+    remove: (index: number) => setKeys((list) => list.filter((_, i) => i !== index)),
+  }
 }
 
 function sampleValue(row: Pick<InputRow, 'input_type'>, text: string): unknown {

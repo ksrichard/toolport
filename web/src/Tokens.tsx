@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { ApiError, createToken, getTokens, revokeToken } from './api'
 import { ClientSnippet } from './ClientSnippet'
 import { CopyButton } from './CopyButton'
+import { useListAnimation } from './motion'
 import type { NewToken } from './types/NewToken'
 import type { ServerSummary } from './types/ServerSummary'
 import type { TokenView } from './types/TokenView'
@@ -40,6 +41,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<NewToken | null>(null)
   const [now, setNow] = useState(Date.now)
+  const rowsRef = useListAnimation<HTMLTableSectionElement>()
 
   const load = useCallback(() => {
     getTokens(server.name).then(
@@ -117,7 +119,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
                   <th />
                 </tr>
               </thead>
-              <tbody>
+              <tbody ref={rowsRef}>
                 {tokens?.map((token) => (
                   <TokenRow key={token.id} server={server.name} token={token} now={now} onRevoked={replace} />
                 ))}
@@ -174,7 +176,7 @@ function TokenRow({ server, token, now, onRevoked }: TokenRowProps) {
         )}
         {state.label === 'active' &&
           (confirm ? (
-            <span className="line">
+            <span className="line confirm">
               <span className="muted">Clients with this token lose access.</span>
               <button className="btn" type="button" onClick={() => setConfirm(false)} disabled={busy}>
                 Cancel

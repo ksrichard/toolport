@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CopyButton } from './CopyButton'
+import { useCallLogAnimation, useListAnimation } from './motion'
 import { BUCKET_MS, CHART_BUCKETS, useLiveStream, type LiveState, type StreamStatus } from './liveStream'
 import type { CallResult } from './types/CallResult'
 import type { ServerSummary } from './types/ServerSummary'
@@ -201,6 +202,7 @@ function Chart({ buckets, now }: { buckets: LiveState['buckets']; now: number })
 }
 
 function CallLog({ live }: { live: LiveState }) {
+  const rowsRef = useCallLogAnimation()
   return (
     <section className="panel">
       <h2>
@@ -221,7 +223,7 @@ function CallLog({ live }: { live: LiveState }) {
                 <th className="num">Latency</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody ref={rowsRef}>
               {live.calls.map((call) => {
                 const result = RESULTS[call.result]
                 return (
@@ -246,6 +248,7 @@ function CallLog({ live }: { live: LiveState }) {
 }
 
 function Clients({ live, now }: { live: LiveState; now: number }) {
+  const listRef = useListAnimation<HTMLUListElement>()
   return (
     <section className="panel">
       <h2>
@@ -254,7 +257,7 @@ function Clients({ live, now }: { live: LiveState; now: number }) {
       {live.clients.length === 0 ? (
         <p className="muted">No MCP client sent a request in the last 2 minutes.</p>
       ) : (
-        <ul className="list">
+        <ul className="list" ref={listRef}>
           {live.clients.map((c) => (
             <li key={`${c.token_name}/${c.client_name}`}>
               <div className="name">{c.client_name ?? 'Unknown client'}</div>
@@ -279,6 +282,7 @@ function Tools({
 }) {
   const list = useToolList(server, onToolsChanged)
   const error = list.loadError ?? list.switchError
+  const listRef = useListAnimation<HTMLUListElement>()
 
   return (
     <section className="panel">
@@ -293,7 +297,7 @@ function Tools({
           {error}
         </p>
       )}
-      <ul className="list">
+      <ul className="list" ref={listRef}>
         {list.tools?.map((t) => (
           <li key={t.name} className="tool">
             <div className="t">

@@ -188,7 +188,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/servers/{name}/apis", get(list_apis))
         .route("/servers/{name}/apis/manual", post(create_api))
-        .route("/servers/{name}/apis/{id}", put(update_api))
+        .route(
+            "/servers/{name}/apis/{id}",
+            put(update_api).delete(delete_api),
+        )
         .route("/servers/{name}/tool-test", post(test_tool))
         .route("/tool-test", post(test_draft_tool))
         .route("/servers/{name}/tools", post(create_tool))
@@ -637,6 +640,58 @@ async fn update_api(
     .await
     .map_err(name_taken(api_name))?;
     Ok(Json(api_view(&state.pool, id).await?))
+}
+
+/// The result of an API removal.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct RemovedApi {
+    #[ts(type = "number")]
+    pub removed_tools: i64,
+}
+
+/// Removes the API and its tools. The call rows stay, because they store the tool name only.
+/// The server must keep at least one enabled tool, as for `delete_tool`.
+async fn delete_api(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((name, id)): Path<(String, i64)>,
+) -> Result<Json<RemovedApi>, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    sqlx::query_scalar::<_, i64>("SELECT id FROM apis WHERE id = $1 AND server_id = $2")
+        .bind(id)
+        .bind(server_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(ApiError::Database)?
+        .ok_or(ApiError::NotFound)?;
+    // The lock keeps two removals from removing the last enabled tools together.
+    let enabled_apis: Vec<i64> =
+        sqlx::query_scalar("SELECT api_id FROM tools WHERE server_id = $1 AND enabled FOR UPDATE")
+            .bind(server_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(ApiError::Database)?;
+    if enabled_apis.iter().all(|api_id| *api_id == id) {
+        return Err(ApiError::LastEnabledTool);
+    }
+    let removed_tools: i64 = sqlx::query_scalar("SELECT count(*) FROM tools WHERE api_id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(ApiError::Database)?;
+    let deleted = sqlx::query("DELETE FROM apis WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::Database)?;
+    if deleted.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    tx.commit().await.map_err(ApiError::Database)?;
+    state.peers.notify_tools_changed(server_id).await;
+    Ok(Json(RemovedApi { removed_tools }))
 }
 
 /// Runs the draft through the same upstream call as a real MCP call. It saves no call row

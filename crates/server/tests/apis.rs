@@ -13,6 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use server::{spec_check::check_due_apis, state::AppState};
 use sqlx::PgPool;
@@ -128,7 +129,7 @@ impl App {
     async fn json(&self, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
         let response = self.as_user(self.user, method, path, body).await;
         let status = response.status();
-        let bytes = http_body_util::BodyExt::collect(response.into_body())
+        let bytes = BodyExt::collect(response.into_body())
             .await
             .unwrap()
             .to_bytes();
@@ -467,4 +468,198 @@ async fn check_skips_apis_that_are_not_due(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(check_due_apis(&app.state).await.unwrap(), 0);
+}
+
+fn api_path(id: i64) -> String {
+    format!("/api/servers/things/apis/{id}")
+}
+
+/// Adds two APIs from text, `A` with `listA` and `getA`, `B` with `listB`.
+async fn two_apis(app: &App) -> (i64, i64) {
+    app.import_text(&titled_spec("A", &["listA", "getA"])).await;
+    app.import_text(&titled_spec("B", &["listB"])).await;
+    let apis = app.apis().await;
+    let id = |name: &str| {
+        apis.iter().find(|api| api["name"] == name).unwrap()["id"]
+            .as_i64()
+            .unwrap()
+    };
+    (id("A"), id("B"))
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn remove_api_deletes_its_tools_and_keeps_the_calls(pool: PgPool) {
+    let app = App::new(pool).await;
+    let (a, b) = two_apis(&app).await;
+    sqlx::query(
+        "INSERT INTO calls (server_id, tool, result, http_status, latency_ms)
+         SELECT id, 'listA', 'ok', 200, 5 FROM servers WHERE name = 'things'",
+    )
+    .execute(&app.state.pool)
+    .await
+    .unwrap();
+
+    let (status, removed) = app.json("DELETE", &api_path(a), json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["removed_tools"], 2);
+    assert_eq!(app.tool_names().await, ["listB"]);
+    let apis = app.apis().await;
+    assert_eq!(apis.len(), 1);
+    assert_eq!(apis[0]["id"], b);
+    let calls: Vec<String> = sqlx::query_scalar("SELECT tool FROM calls")
+        .fetch_all(&app.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(calls, ["listA"]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn remove_api_of_another_user_or_server_is_not_found(pool: PgPool) {
+    let app = App::new(pool).await;
+    let (a, _) = two_apis(&app).await;
+    let other = common::create_user(&app.state.pool, 2, "mallory").await;
+    let response = app
+        .as_user(other, "DELETE", &api_path(a), json!(null))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // An API of another own server is also not found under this server.
+    sqlx::query("INSERT INTO servers (user_id, name) VALUES ($1, 'second')")
+        .bind(app.user)
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+    let path = format!("/api/servers/second/apis/{a}");
+    let (status, error) = app.json("DELETE", &path, json!(null)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+    assert_eq!(error["error"], "not_found");
+
+    let (status, error) = app.json("DELETE", &api_path(a + 100), json!(null)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+    assert_eq!(error["error"], "not_found");
+    assert_eq!(app.tool_names().await, ["getA", "listA", "listB"]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn remove_the_only_api_is_refused(pool: PgPool) {
+    let app = App::new(pool).await;
+    app.import_text(&spec(&["listThings"])).await;
+    let id = app.api_id().await;
+    let (status, error) = app.json("DELETE", &api_path(id), json!(null)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+    assert_eq!(error["error"], "last_enabled_tool");
+    assert_eq!(app.tool_names().await, ["listThings"]);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn remove_api_is_refused_when_the_other_tools_are_off(pool: PgPool) {
+    let app = App::new(pool).await;
+    let (a, b) = two_apis(&app).await;
+    sqlx::query("UPDATE tools SET enabled = false WHERE api_id = $1")
+        .bind(b)
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+    let (status, error) = app.json("DELETE", &api_path(a), json!(null)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+    assert_eq!(error["error"], "last_enabled_tool");
+    assert_eq!(app.tool_names().await, ["getA", "listA", "listB"]);
+
+    // An API with only disabled tools can go.
+    let (status, removed) = app.json("DELETE", &api_path(b), json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["removed_tools"], 1);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn parallel_removals_keep_one_api(pool: PgPool) {
+    let app = App::new(pool).await;
+    let (a, b) = two_apis(&app).await;
+    let (path_a, path_b) = (api_path(a), api_path(b));
+    let (first, second) = tokio::join!(
+        app.json("DELETE", &path_a, json!(null)),
+        app.json("DELETE", &path_b, json!(null)),
+    );
+    let mut statuses = [first.0, second.0];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::UNPROCESSABLE_ENTITY]);
+    assert_eq!(app.apis().await.len(), 1);
+}
+
+const HOST: &str = "toolport.test";
+
+/// Opens an MCP session on `things` and returns its notification stream.
+async fn notification_stream(app: &App) -> Body {
+    let ttl = std::time::Duration::from_secs(3600);
+    let token =
+        server::mcp_tokens::create(&app.state.pool, &app.state.auth.jwt, "things", "t", ttl)
+            .await
+            .unwrap()
+            .value;
+    let post = |session: Option<String>, body: Value| {
+        let mut request = Request::post("/mcp/things")
+            .header(header::HOST, HOST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"));
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let request = request.body(Body::from(body.to_string())).unwrap();
+        app.router.clone().oneshot(request)
+    };
+    let init = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": { "name": "test", "version": "0" },
+        },
+    });
+    let response = post(None, init).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let session = response.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let ready = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+    let response = post(Some(session.clone()), ready).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    // The session is known to the server after its first tools request.
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
+    let response = post(Some(session.clone()), list).await.unwrap();
+    BodyExt::collect(response.into_body()).await.unwrap();
+    let request = Request::get("/mcp/things")
+        .header(header::HOST, HOST)
+        .header(header::ACCEPT, "text/event-stream")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header("mcp-session-id", session)
+        .body(Body::empty())
+        .unwrap();
+    app.router
+        .clone()
+        .oneshot(request)
+        .await
+        .unwrap()
+        .into_body()
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn remove_api_notifies_the_open_sessions(pool: PgPool) {
+    let app = App::new(pool).await;
+    let (a, _) = two_apis(&app).await;
+    let mut stream = notification_stream(&app).await;
+
+    let (status, removed) = app.json("DELETE", &api_path(a), json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    let mut seen = String::new();
+    while !seen.contains("notifications/tools/list_changed") {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.frame())
+            .await
+            .expect("no event in 5 s")
+            .expect("stream ended")
+            .unwrap();
+        if let Some(data) = frame.data_ref() {
+            seen.push_str(&String::from_utf8_lossy(data));
+        }
+    }
 }

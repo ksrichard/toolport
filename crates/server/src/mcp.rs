@@ -312,12 +312,14 @@ impl ServerHandler for ToolportMcp {
         }
         // A refused call is a tool error and not a JSON-RPC error, so the model reads the
         // wait time. It is not saved in the call log, so a flood of calls does not fill the DB.
-        if let Err(limited) = self.rate_limit.check(caller.token_id) {
+        if let Err(limited) = self.rate_limit.check(caller.token_id, caller.owner_id) {
             tracing::info!(
                 server = %caller.server_name,
                 token_id = caller.token_id,
+                user_id = caller.owner_id,
                 tool = %request.name,
-                retry_after_secs = limited.retry_after_secs,
+                limit = limited.scope(),
+                retry_after_secs = limited.retry_after_secs(),
                 "MCP tool call rate limited",
             );
             return Ok(CallToolResult::error(vec![ContentBlock::text(limited.to_string())]).into());

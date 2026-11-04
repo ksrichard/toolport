@@ -36,6 +36,11 @@ pub struct Config {
     #[arg(long, env = "RATE_LIMIT_PER_MINUTE", default_value_t = 60)]
     pub rate_limit_per_minute: u32,
 
+    /// Tool calls per minute for all MCP tokens of one user together, on all servers of the
+    /// user. The burst is the calls of 10 seconds. 0 turns the limit off.
+    #[arg(long, env = "USER_RATE_LIMIT_PER_MINUTE", default_value_t = 300)]
+    pub user_rate_limit_per_minute: u32,
+
     /// Days to keep the rows of the call log. An hourly job deletes older rows.
     /// 0 keeps all rows. The upper bound keeps the cutoff date inside the Postgres range.
     #[arg(long, env = "CALL_RETENTION_DAYS", default_value_t = 30, value_parser = clap::value_parser!(u32).range(0..=36_500))]

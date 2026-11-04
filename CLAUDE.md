@@ -118,6 +118,8 @@ Config:
   Each run checks the APIs whose daily check is on and whose last check is older than 24 hours.
 - `RATE_LIMIT_PER_MINUTE` (default 60) is the number of tool calls per minute for each MCP token.
   0 turns the limit off.
+- `USER_RATE_LIMIT_PER_MINUTE` (default 300) is the number of tool calls per minute for all MCP
+  tokens of one user together, on all servers of the user. 0 turns the limit off.
 - `CALL_RETENTION_DAYS` (default 30) is the number of days to keep call rows. 0 keeps all rows.
 - `.env.example` lists every variable. CI checks that the Compose file is valid
   (`docker compose config`).
@@ -232,14 +234,19 @@ Each milestone ends with working code, tests, and a short demo.
     rows after a set time.
     Status: done. Upstream secrets are encrypted. Each MCP token has a token bucket for
     `tools/call` (`crates/server/src/rate_limit.rs`): the burst is the calls of 10 s, and the
-    bucket refills at the limit per minute. A refused call gets a tool error "rate limit exceeded,
-    retry in N s". It does not reach the upstream API and is not saved in the call log. The
+    bucket refills at the limit per minute. Each user has one more bucket that all tokens of all
+    servers of the user share, so more tokens do not give more calls. A call must pass both
+    buckets, and a refused call takes nothing from either bucket. The owner id comes with the
+    token check, so the limit needs no extra query. A refused call gets a tool error "rate limit
+    exceeded for this token, retry in N s" or "... for this account ...". It does not reach the
+    upstream API and is not saved in the call log. The number of tokens has no cap. The
     buckets live in memory, so each server process has its own limits. An hourly job
     (`calls::delete_old_calls`) deletes old call rows in batches of 5000. After the cleanup, a
     server with only old calls shows "never" as its last call on the All servers page.
-    `GET /api/limits` returns `rate_limit_per_minute` and `rate_limit_burst` (both 0 when the
-    limit is off). The limiter computes both values, so they cannot differ from the real limit.
-    The Tokens page shows the rule under the token table. The Connect step of onboarding adds
+    `GET /api/limits` returns `rate_limit_per_minute`, `rate_limit_burst`,
+    `user_rate_limit_per_minute`, and `user_rate_limit_burst` (0 when that limit is off). The
+    limiter computes the values, so they cannot differ from the real limits. The Tokens page
+    shows the rules under the token table. The Connect step of onboarding adds
     one short sentence. The UI does not show the call retention.
 13. Deploy. Run the same `compose.yaml` on one host with a real `TOOLPORT_DOMAIN`.
     Add a Postgres backup job. Ask before any change to real infrastructure.

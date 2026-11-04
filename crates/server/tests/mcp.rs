@@ -607,7 +607,10 @@ async fn calls_over_the_rate_limit_are_refused(pool: PgPool) {
     }
     let refused = client.call("getPet", json!({ "id": "1" })).await;
     assert_eq!(refused["isError"], true);
-    assert_eq!(text(&refused), "rate limit exceeded, retry in 5 s");
+    assert_eq!(
+        text(&refused),
+        "rate limit exceeded for this token, retry in 5 s"
+    );
     // The refused call never reaches the upstream API, so it is not saved.
     assert_eq!(calls::recent(&pool, 1, 10).await.unwrap().len(), 2);
 }
@@ -632,8 +635,56 @@ async fn each_token_has_its_own_rate_limit(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
+async fn tokens_of_one_user_share_the_user_rate_limit(pool: PgPool) {
+    // The user limit of 12 calls per minute gives a burst of 2 calls.
+    let (app, state) = setup_config(pool.clone(), |config| {
+        config.user_rate_limit_per_minute = 12;
+    })
+    .await;
+    import(&pool, "pets-two", UPSTREAM_SPEC, fake_upstream().await).await;
+    common::create_user(&pool, 2, "hubot").await;
+    import_spec(
+        &pool,
+        ImportRequest {
+            owner: Owner::Login("hubot"),
+            server: "cats",
+            api_name: None,
+            spec_text: UPSTREAM_SPEC,
+            base_url: Some(fake_upstream().await),
+            spec_url: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let first = Client::connect(&app, &state, "pets").await;
+    let second = Client::connect(&app, &state, "pets-two").await;
+    let other_user = Client::connect(&app, &state, "cats").await;
+    for client in [&first, &second] {
+        let result = client.call("getPet", json!({ "id": "1" })).await;
+        assert_eq!(result["isError"], false);
+    }
+    for client in [&first, &second] {
+        let refused = client.call("getPet", json!({ "id": "1" })).await;
+        assert_eq!(refused["isError"], true);
+        assert_eq!(
+            text(&refused),
+            "rate limit exceeded for this account, retry in 5 s"
+        );
+    }
+    for _ in 0..2 {
+        let result = other_user.call("getPet", json!({ "id": "1" })).await;
+        assert_eq!(result["isError"], false);
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
 async fn zero_turns_the_rate_limit_off(pool: PgPool) {
-    let (app, state) = setup_rate_limit(pool, 0).await;
+    let (app, state) = setup_config(pool, |config| {
+        config.rate_limit_per_minute = 0;
+        config.user_rate_limit_per_minute = 0;
+    })
+    .await;
     let client = Client::connect(&app, &state, "pets").await;
     for _ in 0..30 {
         let result = client.call("getPet", json!({ "id": "1" })).await;

@@ -8,10 +8,11 @@ use serde_json::{Value, json};
 use server::state::AppState;
 use sqlx::PgPool;
 
-async fn state_with_limit(pool: PgPool, per_minute: u32) -> AppState {
+async fn state_with_limit(pool: PgPool, per_minute: u32, user_per_minute: u32) -> AppState {
     let github_url = common::fake_github().await;
     let mut config = common::config(&github_url);
     config.rate_limit_per_minute = per_minute;
+    config.user_rate_limit_per_minute = user_per_minute;
     AppState::new(pool, &config).unwrap()
 }
 
@@ -27,25 +28,52 @@ async fn get_limits(state: &AppState, access: Option<String>) -> (StatusCode, Va
 #[sqlx::test(migrations = "../../migrations")]
 async fn limits_show_the_rate_limit_and_burst(pool: PgPool) {
     let user_id = common::create_user(&pool, 1, "octocat").await;
-    let state = state_with_limit(pool, 60).await;
+    let state = state_with_limit(pool, 60, 300).await;
     let access = state.auth.jwt.issue_access(user_id).unwrap();
     let (status, body) = get_limits(&state, Some(access)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body,
-        json!({ "rate_limit_per_minute": 60, "rate_limit_burst": 10 })
+        json!({
+            "rate_limit_per_minute": 60,
+            "rate_limit_burst": 10,
+            "user_rate_limit_per_minute": 300,
+            "user_rate_limit_burst": 50,
+        })
     );
 }
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn limits_are_zero_when_the_limit_is_off(pool: PgPool) {
     let user_id = common::create_user(&pool, 1, "octocat").await;
-    let state = state_with_limit(pool, 0).await;
+    let state = state_with_limit(pool, 0, 0).await;
     let access = state.auth.jwt.issue_access(user_id).unwrap();
     let (_, body) = get_limits(&state, Some(access)).await;
     assert_eq!(
         body,
-        json!({ "rate_limit_per_minute": 0, "rate_limit_burst": 0 })
+        json!({
+            "rate_limit_per_minute": 0,
+            "rate_limit_burst": 0,
+            "user_rate_limit_per_minute": 0,
+            "user_rate_limit_burst": 0,
+        })
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn each_limit_can_be_off_alone(pool: PgPool) {
+    let user_id = common::create_user(&pool, 1, "octocat").await;
+    let state = state_with_limit(pool, 0, 120).await;
+    let access = state.auth.jwt.issue_access(user_id).unwrap();
+    let (_, body) = get_limits(&state, Some(access)).await;
+    assert_eq!(
+        body,
+        json!({
+            "rate_limit_per_minute": 0,
+            "rate_limit_burst": 0,
+            "user_rate_limit_per_minute": 120,
+            "user_rate_limit_burst": 20,
+        })
     );
 }
 

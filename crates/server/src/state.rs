@@ -67,7 +67,10 @@ impl AppState {
         let live = Arc::new(LiveHub::default());
         let peers = Arc::new(SessionPeers::default());
         let upstream_timeout = Duration::from_millis(config.upstream_timeout_ms);
-        let rate_limit = Arc::new(RateLimiter::new(config.rate_limit_per_minute));
+        let rate_limit = Arc::new(RateLimiter::new(
+            config.rate_limit_per_minute,
+            config.user_rate_limit_per_minute,
+        ));
         let handler = ToolportMcp {
             pool: pool.clone(),
             http: upstream.clone(),

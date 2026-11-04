@@ -4,7 +4,10 @@ use std::net::SocketAddr;
 
 use axum::{
     Json,
-    extract::{FromRequest, rejection::JsonRejection},
+    extract::{
+        FromRequest, FromRequestParts, Query,
+        rejection::{JsonRejection, QueryRejection},
+    },
     http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
     response::{IntoResponse, Redirect, Response},
 };
@@ -43,6 +46,8 @@ pub enum ApiError {
     Unauthorized,
     #[error("the request body is not valid: {0}")]
     InvalidBody(#[from] JsonRejection),
+    #[error("the query string is not valid: {0}")]
+    InvalidQuery(#[from] QueryRejection),
     #[error("the route does not exist")]
     NotFound,
     #[error("the database is not available")]
@@ -128,7 +133,7 @@ impl ApiError {
     fn status(&self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::InvalidBody(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidBody(_) | Self::InvalidQuery(_) => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::DatabaseUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Database(_)
@@ -190,6 +195,7 @@ impl ApiError {
         match self {
             Self::Unauthorized => "unauthorized",
             Self::InvalidBody(_) => "invalid_body",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::NotFound => "not_found",
             Self::DatabaseUnavailable(_) => "database_unavailable",
             Self::Database(_)
@@ -282,6 +288,11 @@ impl IntoResponse for ApiError {
 #[derive(FromRequest)]
 #[from_request(via(Json), rejection(ApiError))]
 pub struct ApiJson<T>(pub T);
+
+/// Same as `axum::extract::Query`, with the standard `ApiError` JSON for a bad query.
+#[derive(FromRequestParts)]
+#[from_request(via(Query), rejection(ApiError))]
+pub struct ApiQuery<T>(pub T);
 
 /// Errors in the GitHub sign-in callback. The browser is on a full page load there,
 /// so the response is a redirect to `/?login_error=<code>` and not JSON.

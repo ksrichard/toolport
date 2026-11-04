@@ -8,7 +8,7 @@ use std::{
 };
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{Path, State},
     response::{
         IntoResponse,
@@ -16,15 +16,15 @@ use axum::{
     },
     routing::get,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use ts_rs::TS;
 
 use crate::{
     auth::AuthUser,
-    calls::{self, Bucket, CallRecord, Metrics},
-    error::{ApiError, error_chain},
+    calls::{self, Bucket, CallRecord, CallSeries, Metrics, SeriesWindow},
+    error::{ApiError, ApiQuery, error_chain},
     mcp_tokens::McpCaller,
     servers::owned_server_id,
     state::AppState,
@@ -225,7 +225,28 @@ enum LiveError {
 }
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/servers/{name}/live", get(live))
+    Router::new()
+        .route("/servers/{name}/live", get(live))
+        .route("/servers/{name}/calls/series", get(series))
+}
+
+#[derive(Debug, Deserialize)]
+struct SeriesParams {
+    window: SeriesWindow,
+}
+
+/// The chart data for the windows that are longer than the SSE stream keeps.
+async fn series(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(name): Path<String>,
+    ApiQuery(params): ApiQuery<SeriesParams>,
+) -> Result<Json<CallSeries>, ApiError> {
+    let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    let series = calls::series(&state.pool, server_id, params.window)
+        .await
+        .map_err(ApiError::Database)?;
+    Ok(Json(series))
 }
 
 /// The SSE stream of one server. The events are `snapshot`, `call`, `client`, and `metrics`.

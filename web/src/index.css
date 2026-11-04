@@ -164,6 +164,7 @@ th.num, td.num { text-align: right; }
 tr:last-child td { border-bottom: 0; }
 td .line { justify-content: flex-end; }
 .cell-error { color: var(--bad); white-space: normal; }
+td.form-cell { white-space: normal; background: var(--panel-2); }
 .method { font: 600 11px var(--f-data); padding: 1px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); }
 :root[data-theme="neon"] .method { border-radius: 0; }
 .pill { font-size: 12px; padding: 1px 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }

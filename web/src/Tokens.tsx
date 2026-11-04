@@ -9,6 +9,7 @@ import type { NewToken } from './types/NewToken'
 import type { ServerSummary } from './types/ServerSummary'
 import type { TokenView } from './types/TokenView'
 import { PixelScenes } from './PixelScenes'
+import { relative } from './time'
 
 // The same limit as `MAX_NAME_CHARS` in crates/server/src/mcp_tokens.rs.
 const MAX_NAME_CHARS = 64
@@ -25,15 +26,6 @@ const LIFETIMES: { value: string; days: number | null; label: string }[] = [
 const DEFAULT_LIFETIME = '90'
 
 const message = (error: unknown) => (error instanceof ApiError || error instanceof Error ? error.message : String(error))
-
-function relative(ms: number, now: number): string {
-  const s = Math.max(0, Math.round((now - ms) / 1000))
-  if (s < 60) return 'just now'
-  if (s < 3600) return `${Math.round(s / 60)} min ago`
-  if (s < 86_400) return `${Math.round(s / 3600)} h ago`
-  const days = Math.round(s / 86_400)
-  return days === 1 ? '1 day ago' : `${days} days ago`
-}
 
 function status(token: TokenView, now: number): { label: string; tone: string } {
   if (token.revoked_ms !== null) return { label: 'revoked', tone: 'bad' }

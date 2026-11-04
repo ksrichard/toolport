@@ -7,23 +7,17 @@ import { Apis } from './Apis'
 import { Builder } from './Builder'
 import { Live } from './Live'
 import { Onboarding } from './Onboarding'
+import { Servers } from './Servers'
 import { Tokens } from './Tokens'
 import { Tools } from './Tools'
 import type { ServerSummary } from './types/ServerSummary'
 
-interface Page {
-  path: string
-  label: string
-  milestone: number
-  summary: string
-}
-
-const PAGES: Page[] = [
-  { path: '/', label: 'Live', milestone: 7, summary: '' },
-  { path: '/apis', label: 'APIs', milestone: 9, summary: '' },
-  { path: '/tools', label: 'Tools', milestone: 8, summary: '' },
-  { path: '/tokens', label: 'Tokens', milestone: 10, summary: '' },
-  { path: '/servers', label: 'All servers', milestone: 11, summary: 'Create, rename, and delete your MCP servers.' },
+const PAGES: { path: string; label: string }[] = [
+  { path: '/', label: 'Live' },
+  { path: '/apis', label: 'APIs' },
+  { path: '/tools', label: 'Tools' },
+  { path: '/tokens', label: 'Tokens' },
+  { path: '/servers', label: 'All servers' },
 ]
 
 const THEMES: { id: Theme; label: string }[] = [
@@ -143,6 +137,17 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
       document.title = 'ToolPort'
     }
   }, [selectedTitle])
+  const renamed = (oldName: string, newName: string) => {
+    if (selected?.name === oldName) select(newName)
+    reloadServers()
+  }
+  // After a delete of the selected server, the next server gets selected. With no server
+  // left, the shell shows the onboarding.
+  const deleted = (name: string) => {
+    const next = servers?.find((s) => s.name !== name)
+    if (selected?.name === name && next) select(next.name)
+    reloadServers()
+  }
   const finishOnboarding = (name: string) => {
     select(name)
     reloadServers()
@@ -173,8 +178,9 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
         onDone={finishOnboarding}
       />
     )
-  } else if (selected.apis === 0 || path === '/connect') {
+  } else if ((selected.apis === 0 && path !== '/servers') || path === '/connect') {
     // An earlier onboarding stopped before the import, or the user wants a new client token.
+    // The All servers page stays open, so the user can delete an unfinished server.
     content = (
       <Onboarding
         key={`resume/${selected.name}`}
@@ -200,7 +206,20 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
         <Tools key={selected.name} server={selected.name} navigate={navigate} onChanged={reloadServers} />
       ) : page.path === '/tokens' ? (
         <Tokens key={selected.name} server={selected} onChanged={reloadServers} />
-      ) : page.path === '/' ? (
+      ) : page.path === '/servers' ? (
+        <Servers
+          servers={servers}
+          selected={selected.name}
+          onOpen={(name) => {
+            select(name)
+            navigate('/')
+          }}
+          onNew={() => navigate('/new')}
+          onRenamed={renamed}
+          onDeleted={deleted}
+          onRefresh={reloadServers}
+        />
+      ) : (
         <Live
           key={selected.name}
           server={selected}
@@ -210,16 +229,6 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
             navigate(`/servers/${encodeURIComponent(selected.name)}/tools/${encodeURIComponent(tool ?? 'new')}`)
           }
         />
-      ) : (
-        <>
-          <div className="head">
-            <h1>{page.label}</h1>
-          </div>
-          <section className="panel">
-            <h2>Coming in milestone {page.milestone}</h2>
-            <p className="muted">{page.summary}</p>
-          </section>
-        </>
       )
   }
 

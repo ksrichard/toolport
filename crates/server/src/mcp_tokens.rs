@@ -22,6 +22,8 @@ const LAST_USED_STEP_SECS: f64 = 60.0;
 pub struct McpCaller {
     pub server_id: i64,
     pub server_name: String,
+    /// The user who owns the server. The shared rate limit of the user uses it.
+    pub owner_id: i64,
     pub token_id: i64,
     pub token_name: String,
 }
@@ -156,8 +158,8 @@ pub async fn authorize(
     bearer: Option<&str>,
 ) -> Result<McpCaller, AuthorizeError> {
     let claims = keys.verify_mcp(bearer.ok_or(AuthorizeError::Missing)?)?;
-    let row: Option<(i64, String, bool)> = sqlx::query_as(
-        "SELECT t.id, t.name, t.last_used_at IS NULL OR t.last_used_at < now() - make_interval(secs => $4)
+    let row: Option<(i64, String, i64, bool)> = sqlx::query_as(
+        "SELECT t.id, t.name, s.user_id, t.last_used_at IS NULL OR t.last_used_at < now() - make_interval(secs => $4)
          FROM mcp_tokens t JOIN servers s ON s.id = t.server_id
          WHERE t.jti = $1 AND t.server_id = $2 AND s.name = $3
            AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())",
@@ -168,7 +170,7 @@ pub async fn authorize(
     .bind(LAST_USED_STEP_SECS)
     .fetch_optional(pool)
     .await?;
-    let (token_id, token_name, touch) = row.ok_or(AuthorizeError::NotActive)?;
+    let (token_id, token_name, owner_id, touch) = row.ok_or(AuthorizeError::NotActive)?;
     if touch {
         sqlx::query("UPDATE mcp_tokens SET last_used_at = now() WHERE id = $1")
             .bind(token_id)
@@ -178,6 +180,7 @@ pub async fn authorize(
     Ok(McpCaller {
         server_id: claims.srv,
         server_name: server.to_owned(),
+        owner_id,
         token_id,
         token_name,
     })

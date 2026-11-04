@@ -99,6 +99,7 @@ async fn import(pool: &PgPool, server: &str, spec: &str, base_url: Url) {
             api_name: None,
             spec_text: spec,
             base_url: Some(base_url),
+            spec_url: None,
         },
     )
     .await

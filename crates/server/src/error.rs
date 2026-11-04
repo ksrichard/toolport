@@ -85,6 +85,12 @@ pub enum ApiError {
     MissingSecret,
     #[error("the name of an API that comes from a spec cannot change")]
     SpecApiFixed,
+    #[error("the API does not come from a spec")]
+    NotASpecApi,
+    #[error("the API has no spec URL, so send the new spec text")]
+    SpecTextNeeded,
+    #[error("the API has no spec URL, so it cannot be checked")]
+    NoSpecUrl,
     #[error("the test call is not valid: {0}")]
     TestCall(CallError),
     #[error("an internal error happened")]
@@ -140,6 +146,9 @@ impl ApiError {
             | Self::InvalidAuthHeader
             | Self::MissingSecret
             | Self::SpecApiFixed
+            | Self::NotASpecApi
+            | Self::SpecTextNeeded
+            | Self::NoSpecUrl
             | Self::SpecToolFixed
             | Self::NotASpecTool
             | Self::NotAManualTool
@@ -191,6 +200,9 @@ impl ApiError {
             Self::InvalidAuthHeader => "invalid_auth_header",
             Self::MissingSecret => "missing_secret",
             Self::SpecApiFixed => "spec_api_fixed",
+            Self::NotASpecApi => "not_a_spec_api",
+            Self::SpecTextNeeded => "spec_text_needed",
+            Self::NoSpecUrl => "no_spec_url",
             Self::ToolNameTaken(_) => "tool_name_taken",
             Self::SpecToolFixed => "spec_tool_fixed",
             Self::NotASpecTool => "not_a_spec_tool",

@@ -9,6 +9,7 @@ pub mod mcp_tokens;
 pub mod secrets;
 pub mod servers;
 pub mod sessions;
+pub mod spec_check;
 pub mod state;
 pub mod templates;
 pub mod tools;
@@ -28,6 +29,7 @@ pub fn app(state: AppState) -> Router {
         .merge(live::routes())
         .merge(servers::routes())
         .merge(tools::routes())
+        .merge(spec_check::routes())
         .fallback(|| async { ApiError::NotFound });
     Router::new()
         .nest("/api", api)

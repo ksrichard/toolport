@@ -17,14 +17,14 @@ use crate::upstream_guard::check_url;
 use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
-    import::{ImportRequest, Owner, import_spec},
+    import::{ImportReport, ImportRequest, Owner, import_spec},
     mcp_tokens::{self, DEFAULT_TTL},
     state::AppState,
     templates::{self, TEMPLATES, Template},
 };
 
 /// Large public specs (for example Stripe or GitHub) are several MiB.
-const MAX_SPEC_BYTES: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_SPEC_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Serialize, TS, sqlx::FromRow)]
 #[ts(export)]
@@ -92,6 +92,10 @@ pub struct ImportedApi {
     /// True when an API with the same name existed. It was updated in place.
     pub replaced: bool,
     pub tools: Vec<String>,
+    /// Spec tools that this import created.
+    pub added: Vec<String>,
+    /// Unedited spec tools that the new spec changed.
+    pub changed: Vec<String>,
     /// Edited tools that stayed.
     pub kept: Vec<String>,
     /// Spec tools deleted because the spec no longer has their operation.
@@ -246,15 +250,17 @@ async fn import_api(
 ) -> Result<Json<Vec<ImportedApi>>, ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
 
-    let (specs, base_url): (Vec<String>, Option<String>) = match body {
+    let (specs, base_url, spec_url): (Vec<String>, Option<String>, Option<String>) = match body {
         ImportApi::Template { template } => {
             let template = templates::find(&template).ok_or(ApiError::NotFound)?;
             let specs = template.specs.iter().map(|s| (*s).to_owned()).collect();
-            (specs, None)
+            (specs, None, None)
         }
-        ImportApi::Text { spec, base_url } => (vec![spec], base_url),
+        ImportApi::Text { spec, base_url } => (vec![spec], base_url, None),
         ImportApi::Url { spec_url, base_url } => {
-            (vec![download_spec(&state, &spec_url).await?], base_url)
+            let url = parse_spec_url(&spec_url)?;
+            let text = download_spec(&state, &url).await?;
+            (vec![text], base_url, Some(url.to_string()))
         }
     };
     let base_url = match base_url.as_deref().map(str::trim) {
@@ -272,15 +278,25 @@ async fn import_api(
                 api_name: None,
                 spec_text,
                 base_url: base_url.clone(),
+                spec_url: spec_url.as_deref(),
             },
         )
         .await?;
         state.peers.notify_tools_changed(server_id).await;
-        imported.push(ImportedApi {
+        imported.push(report.into());
+    }
+    Ok(Json(imported))
+}
+
+impl From<ImportReport> for ImportedApi {
+    fn from(report: ImportReport) -> Self {
+        Self {
             name: report.api_name,
             base_url: report.base_url.to_string(),
             replaced: report.replaced,
             tools: report.tools,
+            added: report.added,
+            changed: report.changed,
             kept: report.kept,
             removed: report.removed,
             skipped: report
@@ -292,30 +308,55 @@ async fn import_api(
                     reason: skipped.reason.to_string(),
                 })
                 .collect(),
-        });
+        }
     }
-    Ok(Json(imported))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DownloadError {
+    #[error("the spec URL must be an http:// or https:// URL")]
+    InvalidUrl,
+    #[error("cannot download the spec from the URL")]
+    Request(#[source] reqwest::Error),
+    #[error("the spec must be smaller than {} MiB", .0 / (1024 * 1024))]
+    TooLarge(usize),
+    #[error("the spec is not UTF-8 text")]
+    NotText,
+}
+
+impl From<DownloadError> for ApiError {
+    fn from(error: DownloadError) -> Self {
+        match error {
+            DownloadError::InvalidUrl => Self::InvalidSpecUrl,
+            DownloadError::Request(source) => Self::SpecDownload(source),
+            DownloadError::TooLarge(limit) => Self::SpecTooLarge(limit),
+            DownloadError::NotText => Self::SpecNotText,
+        }
+    }
+}
+
+pub(crate) fn parse_spec_url(text: &str) -> Result<Url, DownloadError> {
+    Url::parse(text.trim()).map_err(|_| DownloadError::InvalidUrl)
 }
 
 /// The browser cannot fetch most spec URLs itself, because the hosts do not send CORS headers.
-async fn download_spec(state: &AppState, spec_url: &str) -> Result<String, ApiError> {
-    let url = Url::parse(spec_url.trim()).map_err(|_| ApiError::InvalidSpecUrl)?;
-    check_url(&url, state.allow_local_upstream).map_err(|_| ApiError::InvalidSpecUrl)?;
+pub(crate) async fn download_spec(state: &AppState, url: &Url) -> Result<String, DownloadError> {
+    check_url(url, state.allow_local_upstream).map_err(|_| DownloadError::InvalidUrl)?;
     let mut response = state
         .upstream
-        .get(url)
+        .get(url.clone())
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(ApiError::SpecDownload)?;
+        .map_err(DownloadError::Request)?;
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(ApiError::SpecDownload)? {
+    while let Some(chunk) = response.chunk().await.map_err(DownloadError::Request)? {
         if bytes.len() + chunk.len() > MAX_SPEC_BYTES {
-            return Err(ApiError::SpecTooLarge(MAX_SPEC_BYTES));
+            return Err(DownloadError::TooLarge(MAX_SPEC_BYTES));
         }
         bytes.extend_from_slice(&chunk);
     }
-    String::from_utf8(bytes).map_err(|_| ApiError::SpecNotText)
+    String::from_utf8(bytes).map_err(|_| DownloadError::NotText)
 }
 
 async fn create_token(

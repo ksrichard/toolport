@@ -88,6 +88,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             api_name: args.api_name.as_deref(),
             spec_text: &spec_text,
             base_url: args.base_url,
+            spec_url: is_url(&args.spec).then_some(args.spec.as_str()),
         },
     )
     .await?;
@@ -102,7 +103,7 @@ async fn run(args: Args) -> Result<(), CliError> {
     println!("api:      {} ({api_state})", report.api_name);
     println!("base URL: {}", report.base_url);
     println!("tools:    {}", report.tools.len());
-    for name in &report.tools {
+    for name in &report.added {
         println!("  + {name}");
     }
     for name in &report.kept {
@@ -121,8 +122,12 @@ async fn run(args: Args) -> Result<(), CliError> {
     Ok(())
 }
 
+fn is_url(source: &str) -> bool {
+    source.starts_with("http://") || source.starts_with("https://")
+}
+
 async fn read_spec(source: &str) -> Result<String, CliError> {
-    if source.starts_with("http://") || source.starts_with("https://") {
+    if is_url(source) {
         let client = reqwest::Client::builder()
             .user_agent("toolport")
             .timeout(Duration::from_secs(30))

@@ -1,9 +1,10 @@
-use std::process::ExitCode;
+use std::{process::ExitCode, time::Duration};
 
 use clap::Parser;
 use server::{
     config::Config,
     error::{StartupError, error_chain},
+    spec_check,
     state::AppState,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -45,6 +46,10 @@ async fn run(config: Config) -> Result<(), StartupError> {
     tracing::info!(bind_addr = %config.bind_addr, "server listening");
 
     let state = AppState::new(pool, &config)?;
+    spec_check::spawn_daily_check(
+        state.clone(),
+        Duration::from_secs(config.spec_check_interval_secs),
+    );
     axum::serve(listener, server::app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await

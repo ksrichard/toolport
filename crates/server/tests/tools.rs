@@ -383,6 +383,7 @@ async fn import_petstore(app: &App) {
             api_name: None,
             spec_text: PETSTORE,
             base_url: Some("https://petstore.example/api/v3".parse().unwrap()),
+            spec_url: None,
         },
     )
     .await
@@ -883,6 +884,7 @@ async fn reimport(app: &App, spec: &str) -> server::import::ImportReport {
             api_name: None,
             spec_text: spec,
             base_url: Some("https://petstore.example/api/v3".parse().unwrap()),
+            spec_url: None,
         },
     )
     .await
@@ -1157,6 +1159,7 @@ async fn import_petstore_at(app: &App, base_url: &str) {
             api_name: None,
             spec_text: PETSTORE,
             base_url: Some(base_url.parse().unwrap()),
+            spec_url: None,
         },
     )
     .await
@@ -1834,6 +1837,7 @@ async fn reimport_leaves_a_detached_tool_alone(pool: PgPool) {
             api_name: None,
             spec_text: PETSTORE,
             base_url: Some("https://petstore.example/api/v3".parse().unwrap()),
+            spec_url: None,
         },
     )
     .await

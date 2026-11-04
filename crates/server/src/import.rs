@@ -1,4 +1,4 @@
-//! Loads an OpenAPI spec into a server. The `import-spec` binary uses it until the APIs page exists.
+//! Loads an OpenAPI spec into a server. The dashboard and the `import-spec` binary use it.
 
 use reqwest::Url;
 use sha2::{Digest, Sha256};
@@ -21,6 +21,8 @@ pub struct ImportRequest<'a> {
     pub spec_text: &'a str,
     /// The default is the first `servers` URL in the spec.
     pub base_url: Option<Url>,
+    /// Set when the spec came from a URL. The daily check downloads it again.
+    pub spec_url: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -32,6 +34,10 @@ pub struct ImportReport {
     pub replaced: bool,
     /// The spec tools of the API after the import, under their current names.
     pub tools: Vec<String>,
+    /// Spec tools that this import created.
+    pub added: Vec<String>,
+    /// Unedited spec tools that the new spec changed.
+    pub changed: Vec<String>,
     /// Edited tools that stayed. The import changed only their stored spec version.
     pub kept: Vec<String>,
     /// Spec tools deleted because their operation is not in the spec any more.
@@ -150,23 +156,30 @@ pub async fn import_spec(
     let replaced = existing.is_some();
     let api_id: i64 = match existing {
         Some(id) => {
-            sqlx::query("UPDATE apis SET base_url = $1, spec = $2 WHERE id = $3")
-                .bind(base_url.as_str())
-                .bind(request.spec_text)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            // A spec without a URL cannot be checked, so the check turns off.
+            sqlx::query(
+                "UPDATE apis SET base_url = $1, spec = $2, spec_url = $3,
+                        auto_check = auto_check AND $3 IS NOT NULL, updated_at = now()
+                 WHERE id = $4",
+            )
+            .bind(base_url.as_str())
+            .bind(request.spec_text)
+            .bind(request.spec_url)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
             id
         }
         None => {
             sqlx::query_scalar(
-                "INSERT INTO apis (server_id, name, base_url, spec)
-                 VALUES ($1, $2, $3, $4) RETURNING id",
+                "INSERT INTO apis (server_id, name, base_url, spec, spec_url)
+                 VALUES ($1, $2, $3, $4, $5) RETURNING id",
             )
             .bind(server_id)
             .bind(&api_name)
             .bind(base_url.as_str())
             .bind(request.spec_text)
+            .bind(request.spec_url)
             .fetch_one(&mut *tx)
             .await?
         }
@@ -184,8 +197,8 @@ pub async fn import_spec(
     .fetch_all(&mut *tx)
     .await?;
 
-    let old_rows: Vec<(i64, String, bool, String)> = sqlx::query_as(
-        "SELECT id, operation, edited, name FROM tools
+    let old_rows: Vec<(i64, String, bool, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, operation, edited, name, spec_hash FROM tools
          WHERE api_id = $1 AND source = 'spec'",
     )
     .bind(api_id)
@@ -194,6 +207,8 @@ pub async fn import_spec(
 
     let mut tools = Vec::with_capacity(conversion.tools.len());
     let mut kept = Vec::new();
+    let mut added = Vec::new();
+    let mut changed = Vec::new();
     let mut taken = Vec::new();
     for (tool, operation) in conversion.tools.iter().zip(&operations) {
         let hash = spec_hash(tool)?;
@@ -231,9 +246,10 @@ pub async fn import_spec(
                 .bind(operation)
                 .execute(&mut *tx)
                 .await?;
+                added.push(tool.name.clone());
                 tools.push(tool.name.clone());
             }
-            Some((id, _, true, name)) => {
+            Some((id, _, true, name, _)) => {
                 sqlx::query("UPDATE tools SET spec_tool = $1, spec_hash = $2 WHERE id = $3")
                     .bind(Json(tool))
                     .bind(&hash)
@@ -243,7 +259,10 @@ pub async fn import_spec(
                 kept.push(name.clone());
                 tools.push(name.clone());
             }
-            Some((id, _, false, _)) => {
+            Some((id, _, false, _, old_hash)) => {
+                if old_hash.as_deref() != Some(hash.as_str()) {
+                    changed.push(tool.name.clone());
+                }
                 sqlx::query(
                     "UPDATE tools SET name = $1, description = $2, input_schema = $3,
                             request = $4, spec_tool = $5, spec_hash = $6
@@ -276,6 +295,8 @@ pub async fn import_spec(
         base_url,
         replaced,
         tools,
+        added,
+        changed,
         kept,
         removed,
         skipped: conversion.skipped,

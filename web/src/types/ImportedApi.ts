@@ -7,6 +7,14 @@ export type ImportedApi = { name: string, base_url: string,
  */
 replaced: boolean, tools: Array<string>, 
 /**
+ * Spec tools that this import created.
+ */
+added: Array<string>, 
+/**
+ * Unedited spec tools that the new spec changed.
+ */
+changed: Array<string>, 
+/**
  * Edited tools that stayed.
  */
 kept: Array<string>, 

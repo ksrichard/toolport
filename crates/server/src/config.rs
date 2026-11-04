@@ -26,6 +26,11 @@ pub struct Config {
     #[arg(long, env = "UPSTREAM_TIMEOUT_MS", default_value_t = 10_000)]
     pub upstream_timeout_ms: u64,
 
+    /// Seconds between two runs of the spec check. Each run checks the APIs whose daily
+    /// check is on and whose last check is older than 24 hours.
+    #[arg(long, env = "SPEC_CHECK_INTERVAL_SECS", default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..))]
+    pub spec_check_interval_secs: u64,
+
     /// The URL that users open in the browser. GitHub sends users back to this URL after sign-in.
     #[arg(long, env = "PUBLIC_URL")]
     pub public_url: Url,

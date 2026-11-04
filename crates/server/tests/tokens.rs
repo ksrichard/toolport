@@ -58,6 +58,18 @@ impl App {
         (status, common::json_body(response).await)
     }
 
+    /// For routes that answer with no body.
+    async fn status(&self, user_id: i64, method: &str, path: &str) -> StatusCode {
+        let access = self.state.auth.jwt.issue_access(user_id).unwrap();
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {access}"))
+            .body(Body::empty())
+            .unwrap();
+        self.router.clone().oneshot(request).await.unwrap().status()
+    }
+
     async fn create(&self, name: &str) -> Value {
         let (status, created) = self
             .json(
@@ -110,7 +122,7 @@ async fn create_returns_the_value_once_and_list_never_does(pool: PgPool) {
     assert_eq!(created["row"]["name"], "claude-code");
     assert!(created["row"]["created_ms"].as_i64().unwrap() > 0);
     assert_eq!(created["row"]["last_used_ms"], Value::Null);
-    assert_eq!(created["row"]["revoked_ms"], Value::Null);
+    assert!(created["row"].get("revoked_ms").is_none());
 
     app.create("cursor").await;
     let list = app.list().await;
@@ -145,35 +157,33 @@ async fn token_names_are_checked(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
-async fn revoke_stops_the_token_at_once_and_keeps_the_row(pool: PgPool) {
-    let app = App::new(pool).await;
+async fn revoke_deletes_the_token(pool: PgPool) {
+    let app = App::new(pool.clone()).await;
     let created = app.create("laptop").await;
     let token = created["token"].as_str().unwrap();
     let id = created["row"]["id"].as_i64().unwrap();
+    let kept = app.create("desktop").await;
     assert_eq!(app.initialize(token).await.status(), StatusCode::OK);
 
     let path = format!("/api/servers/pets/tokens/{id}/revoke");
-    let (status, revoked) = app.json(1, "POST", &path, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(revoked["revoked_ms"].as_i64().is_some());
+    assert_eq!(app.status(1, "POST", &path).await, StatusCode::NO_CONTENT);
     assert_eq!(
         app.initialize(token).await.status(),
         StatusCode::UNAUTHORIZED
     );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM mcp_tokens WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
 
-    let list = app.list().await;
-    assert_eq!(list.as_array().unwrap().len(), 1);
-    assert_eq!(list[0], revoked);
+    assert_eq!(app.list().await, json!([kept["row"]]));
     let (_, servers) = app.json(1, "GET", "/api/servers", None).await;
-    assert_eq!(servers[0]["active_tokens"], 0);
+    assert_eq!(servers[0]["active_tokens"], 1);
 
+    // A second revoke finds no token.
     let (status, error) = app.json(1, "POST", &path, None).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(error["error"], "token_already_revoked");
-
-    let (status, error) = app
-        .json(1, "POST", "/api/servers/pets/tokens/999999/revoke", None)
-        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(error["error"], "not_found");
 }
@@ -223,7 +233,7 @@ async fn other_users_cannot_see_or_revoke_tokens(pool: PgPool) {
         .await;
     assert_eq!(foreign, unknown);
     assert_eq!(foreign.0, StatusCode::NOT_FOUND);
-    assert_eq!(app.list().await[0]["revoked_ms"], Value::Null);
+    assert_eq!(app.list().await.as_array().unwrap().len(), 1);
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -312,8 +322,7 @@ async fn never_expiring_token_works_until_revoke(pool: PgPool) {
     assert_eq!(app.initialize(token).await.status(), StatusCode::OK);
     let id = created["row"]["id"].as_i64().unwrap();
     let path = format!("/api/servers/pets/tokens/{id}/revoke");
-    let (status, _) = app.json(1, "POST", &path, None).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(app.status(1, "POST", &path).await, StatusCode::NO_CONTENT);
     assert_eq!(
         app.initialize(token).await.status(),
         StatusCode::UNAUTHORIZED

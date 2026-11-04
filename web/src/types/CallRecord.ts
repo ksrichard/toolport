@@ -8,4 +8,8 @@ export type CallRecord = { id: number,
 /**
  * Milliseconds since the Unix epoch.
  */
-at_ms: number, tool: string, client_name: string | null, token_name: string | null, result: CallResult, http_status: number | null, latency_ms: number, };
+at_ms: number, tool: string, client_name: string | null, 
+/**
+ * The name of the token at the time of the call. The token can be revoked since then.
+ */
+token_name: string | null, result: CallResult, http_status: number | null, latency_ms: number, };

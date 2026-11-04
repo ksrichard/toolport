@@ -11,4 +11,4 @@ expires_ms: number | null,
 /**
  * The server updates it at most once a minute.
  */
-last_used_ms: number | null, revoked_ms: number | null, };
+last_used_ms: number | null, };

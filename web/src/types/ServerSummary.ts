@@ -2,7 +2,7 @@
 
 export type ServerSummary = { name: string, mcp_url: string, apis: number, tools: number, enabled_tools: number, 
 /**
- * Tokens that are not revoked and not expired.
+ * Tokens that are not expired.
  */
 active_tokens: number, 
 /**

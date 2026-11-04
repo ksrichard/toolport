@@ -43,7 +43,7 @@ pub struct TokenInfo {
     /// `None` for a token that never expires.
     pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
-    pub revoked: bool,
+    pub expired: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -69,7 +69,7 @@ pub enum AuthorizeError {
     Missing,
     #[error("the token is not valid")]
     Invalid(#[from] jsonwebtoken::errors::Error),
-    #[error("the token is revoked, expired, or for another server")]
+    #[error("the token row is gone, expired, or for another server")]
     NotActive,
     #[error("the database query failed")]
     Database(#[from] sqlx::Error),
@@ -129,7 +129,7 @@ pub async fn list(pool: &PgPool, server: &str) -> Result<Vec<TokenInfo>, TokenEr
                 to_char(t.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS created_at,
                 to_char(t.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS expires_at,
                 to_char(t.last_used_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS last_used_at,
-                t.revoked_at IS NOT NULL AS revoked
+                t.expires_at IS NOT NULL AND t.expires_at <= now() AS expired
          FROM mcp_tokens t JOIN servers s ON s.id = t.server_id
          WHERE s.name = $1 ORDER BY t.id",
     )
@@ -139,14 +139,13 @@ pub async fn list(pool: &PgPool, server: &str) -> Result<Vec<TokenInfo>, TokenEr
     Ok(rows)
 }
 
-/// Returns false when no active token has this id.
+/// Deletes the token row, so the token stops working at once. Returns false when no token
+/// has this id.
 pub async fn revoke(pool: &PgPool, id: i64) -> Result<bool, TokenError> {
-    let result = sqlx::query(
-        "UPDATE mcp_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?;
+    let result = sqlx::query("DELETE FROM mcp_tokens WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -162,7 +161,7 @@ pub async fn authorize(
         "SELECT t.id, t.name, s.user_id, t.last_used_at IS NULL OR t.last_used_at < now() - make_interval(secs => $4)
          FROM mcp_tokens t JOIN servers s ON s.id = t.server_id
          WHERE t.jti = $1 AND t.server_id = $2 AND s.name = $3
-           AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())",
+           AND (t.expires_at IS NULL OR t.expires_at > now())",
     )
     .bind(&claims.jti)
     .bind(claims.srv)

@@ -17,7 +17,7 @@ struct AccessClaims {
     exp: u64,
 }
 
-/// An MCP client token. It is valid only while its `jti` row exists and is not revoked.
+/// An MCP client token. It is valid only while its `jti` row exists. A revoke deletes the row.
 #[derive(Serialize, Deserialize)]
 pub struct McpClaims {
     /// The id of the one server that the token opens.

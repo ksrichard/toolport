@@ -29,7 +29,6 @@ const DEFAULT_LIFETIME = '90'
 const message = (error: unknown) => (error instanceof ApiError || error instanceof Error ? error.message : String(error))
 
 function status(token: TokenView, now: number): { label: string; tone: string } {
-  if (token.revoked_ms !== null) return { label: 'revoked', tone: 'bad' }
   if (token.expires_ms !== null && token.expires_ms <= now) return { label: 'expired', tone: 'warn' }
   return { label: 'active', tone: 'ok' }
 }
@@ -61,9 +60,8 @@ export function Tokens({ server, onChanged }: TokensProps) {
   }, [server.name])
   useEffect(load, [load])
 
-  const replace = (token: TokenView) => {
-    setTokens((list) => list?.map((t) => (t.id === token.id ? token : t)) ?? null)
-    setNow(Date.now())
+  const remove = (id: number) => {
+    setTokens((list) => list?.filter((t) => t.id !== id) ?? null)
     onChanged()
   }
 
@@ -72,7 +70,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
       <div className="head">
         <div>
           <h1>Tokens</h1>
-          <div className="sub">An MCP client sends a token to connect. A revoked token stops working at once.</div>
+          <div className="sub">An MCP client sends a token to connect. Revoke deletes a token, and its clients stop working at once.</div>
         </div>
         <PixelScenes />
         <div className="head-actions">
@@ -129,7 +127,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
               </thead>
               <tbody ref={rowsRef}>
                 {tokens?.map((token) => (
-                  <TokenRow key={token.id} server={server.name} token={token} now={now} onRevoked={replace} />
+                  <TokenRow key={token.id} server={server.name} token={token} now={now} onRevoked={remove} />
                 ))}
               </tbody>
             </table>
@@ -145,7 +143,7 @@ interface TokenRowProps {
   server: string
   token: TokenView
   now: number
-  onRevoked: (token: TokenView) => void
+  onRevoked: (id: number) => void
 }
 
 function TokenRow({ server, token, now, onRevoked }: TokenRowProps) {
@@ -158,8 +156,8 @@ function TokenRow({ server, token, now, onRevoked }: TokenRowProps) {
     setBusy(true)
     setError(null)
     try {
-      onRevoked(await revokeToken(server, token.id))
-      setConfirm(false)
+      await revokeToken(server, token.id)
+      onRevoked(token.id)
     } catch (e) {
       setError(message(e))
     } finally {
@@ -192,22 +190,21 @@ function TokenRow({ server, token, now, onRevoked }: TokenRowProps) {
             {error}{' '}
           </span>
         )}
-        {state.label === 'active' &&
-          (confirm ? (
-            <span className="line confirm">
-              <span className="muted">Clients with this token lose access.</span>
-              <button className="btn" type="button" onClick={() => setConfirm(false)} disabled={busy}>
-                Cancel
-              </button>
-              <button className="btn danger" type="button" onClick={revoke} disabled={busy}>
-                {busy ? 'Revoking…' : 'Yes, revoke'}
-              </button>
-            </span>
-          ) : (
-            <button className="btn" type="button" onClick={() => setConfirm(true)} aria-label={`Revoke ${token.name}`}>
-              Revoke
+        {confirm ? (
+          <span className="line confirm">
+            <span className="muted">This deletes the token. Clients that use it stop working at once.</span>
+            <button className="btn" type="button" onClick={() => setConfirm(false)} disabled={busy}>
+              Cancel
             </button>
-          ))}
+            <button className="btn danger" type="button" onClick={revoke} disabled={busy}>
+              {busy ? 'Revoking…' : 'Yes, revoke'}
+            </button>
+          </span>
+        ) : (
+          <button className="btn" type="button" onClick={() => setConfirm(true)} aria-label={`Revoke ${token.name}`}>
+            Revoke
+          </button>
+        )}
       </td>
     </tr>
   )

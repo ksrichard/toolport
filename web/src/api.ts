@@ -143,7 +143,7 @@ export const createToken = (name: string, tokenName: string, expiresInDays?: num
 }
 
 export const revokeToken = (name: string, id: number) =>
-  api<TokenView>(`${server(name)}/tokens/${id}/revoke`, { method: 'POST' })
+  api<void>(`${server(name)}/tokens/${id}/revoke`, { method: 'POST' })
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
 const toolPath = (name: string, tool: string) => `${server(name)}/tools/${encodeURIComponent(tool)}`

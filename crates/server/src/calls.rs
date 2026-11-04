@@ -30,6 +30,8 @@ pub enum CallResult {
 pub struct NewCall<'a> {
     pub server_id: i64,
     pub token_id: i64,
+    /// Saved with the call, so the log keeps the name after a revoke deletes the token.
+    pub token_name: &'a str,
     pub client_name: Option<&'a str>,
     pub tool: &'a str,
     pub result: CallResult,
@@ -48,6 +50,7 @@ pub struct CallRecord {
     pub at_ms: i64,
     pub tool: String,
     pub client_name: Option<String>,
+    /// The name of the token at the time of the call. The token can be revoked since then.
     pub token_name: Option<String>,
     pub result: CallResult,
     pub http_status: Option<i16>,
@@ -133,7 +136,7 @@ pub struct CallSeries {
 macro_rules! record_columns {
     () => {
         "c.id, (extract(epoch FROM c.created_at) * 1000)::bigint AS at_ms, c.tool, c.client_name,
-         t.name AS token_name, c.result, c.http_status, c.latency_ms"
+         c.token_name, c.result, c.http_status, c.latency_ms"
     };
 }
 
@@ -142,14 +145,15 @@ pub async fn record(pool: &PgPool, call: NewCall<'_>) -> Result<CallRecord, sqlx
     let http_status = call.http_status.and_then(|s| i16::try_from(s).ok());
     sqlx::query_as(concat!(
         "WITH c AS (
-             INSERT INTO calls (server_id, token_id, client_name, tool, result, http_status, latency_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+             INSERT INTO calls (server_id, token_id, token_name, client_name, tool, result, http_status, latency_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *
          ) SELECT ",
         record_columns!(),
-        " FROM c LEFT JOIN mcp_tokens t ON t.id = c.token_id"
+        " FROM c"
     ))
     .bind(call.server_id)
     .bind(call.token_id)
+    .bind(call.token_name)
     .bind(call.client_name)
     .bind(call.tool)
     .bind(call.result)
@@ -168,7 +172,7 @@ pub async fn recent(
     sqlx::query_as(concat!(
         "SELECT ",
         record_columns!(),
-        " FROM calls c LEFT JOIN mcp_tokens t ON t.id = c.token_id
+        " FROM calls c
          WHERE c.server_id = $1 ORDER BY c.id DESC LIMIT $2"
     ))
     .bind(server_id)

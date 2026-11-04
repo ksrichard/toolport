@@ -183,6 +183,12 @@ impl LiveHub {
         counts
     }
 
+    /// Removes the clients of a revoked token.
+    pub fn forget_token(&self, token_id: i64) {
+        let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
+        clients.retain(|key, _| key.token_id != token_id);
+    }
+
     /// Removes the clients of a deleted server.
     pub fn forget_server(&self, server_id: i64) {
         let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);

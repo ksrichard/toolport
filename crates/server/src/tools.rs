@@ -23,7 +23,7 @@ use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
     secrets::seal,
-    servers::{ServerSummary, mcp_url, owned_server_id},
+    servers::{ServerSummary, mcp_url, name_error, owned_server_id},
     state::AppState,
     upstream::{ApiTarget, DraftSecret, HttpTrace, UpstreamAuth, UpstreamCtx, call_upstream},
 };
@@ -1239,24 +1239,22 @@ async fn create_server_with_tool(
             .bind(server_name)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|error| match &error {
-                sqlx::Error::Database(db) if db.is_unique_violation() => {
-                    ApiError::ServerNameTaken(server_name.to_owned())
-                }
-                _ => ApiError::Database(error),
-            })?;
+            .map_err(|error| name_error(error, server_name))?;
     let api_id = insert_manual_api(&state, &mut tx, server_id, &body.api).await?;
     let tool = draft_to_tool(&body.draft)?;
     insert_manual_tool(&mut tx, server_id, api_id, &tool).await?;
     tx.commit().await.map_err(ApiError::Database)?;
     state.peers.notify_tools_changed(server_id).await;
     let summary = ServerSummary {
+        id: server_id,
         name: server_name.to_owned(),
         mcp_url: mcp_url(&state, server_name),
         apis: 1,
         tools: 1,
         enabled_tools: 1,
         active_tokens: 0,
+        last_call_ms: None,
+        connected_clients: 0,
     };
     Ok((StatusCode::CREATED, Json(summary)))
 }

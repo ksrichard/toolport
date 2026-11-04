@@ -2,7 +2,11 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use rmcp::{RoleServer, service::Peer};
+use rmcp::{
+    RoleServer,
+    service::Peer,
+    transport::streamable_http_server::{SessionManager, session::local::LocalSessionManager},
+};
 
 /// The peers of the open sessions, grouped by server id and keyed by session id.
 /// A closed session stays here until the next notification to it fails.
@@ -38,6 +42,20 @@ impl SessionPeers {
                 && let Some(sessions) = peers.get_mut(&server_id)
             {
                 sessions.remove(&session_id);
+            }
+        }
+    }
+
+    /// Closes the open sessions of a server and forgets them. A rename or a delete calls it,
+    /// because the clients must connect again with the new URL or not at all.
+    pub async fn close_server(&self, server_id: i64, manager: &LocalSessionManager) {
+        let sessions = match self.peers.lock() {
+            Ok(mut peers) => peers.remove(&server_id).unwrap_or_default(),
+            Err(_) => return,
+        };
+        for session_id in sessions.into_keys() {
+            if let Err(error) = manager.close_session(&session_id.as_str().into()).await {
+                tracing::warn!(%error, server_id, "cannot close an MCP session");
             }
         }
     }

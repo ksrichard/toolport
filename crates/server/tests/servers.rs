@@ -287,3 +287,211 @@ async fn routes_need_a_signed_in_user(pool: PgPool) {
     let response = app.router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn server_list_shows_the_status(pool: PgPool) {
+    let app = App::new(pool.clone()).await;
+    for name in ["empty", "weather"] {
+        app.request(1, "POST", "/api/servers", Some(json!({ "name": name })))
+            .await;
+    }
+    let body = json!({ "source": "template", "template": "weather" });
+    app.request(1, "POST", "/api/servers/weather/apis", Some(body))
+        .await;
+    app.request(
+        1,
+        "POST",
+        "/api/servers/weather/tokens",
+        Some(json!({ "name": "laptop" })),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO calls (server_id, tool, result, latency_ms, created_at)
+         SELECT id, 'getWeather', 'ok', 5, '2026-11-04T10:00:00Z' FROM servers WHERE name = 'weather'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (status, servers) = app.json(1, "GET", "/api/servers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(servers[0]["name"], "empty");
+    assert_eq!(servers[0]["last_call_ms"], Value::Null);
+    assert_eq!(servers[0]["connected_clients"], 0);
+    assert_eq!(servers[1]["apis"], 2);
+    assert_eq!(servers[1]["enabled_tools"], 2);
+    assert_eq!(servers[1]["active_tokens"], 1);
+    assert_eq!(servers[1]["last_call_ms"], 1_793_786_400_000_i64);
+    assert!(servers[1].get("id").is_none());
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn rename_checks_the_new_name(pool: PgPool) {
+    let app = App::new(pool.clone()).await;
+    for name in ["pets", "shop"] {
+        app.request(1, "POST", "/api/servers", Some(json!({ "name": name })))
+            .await;
+    }
+
+    let (status, renamed) = app
+        .json(
+            1,
+            "PUT",
+            "/api/servers/pets",
+            Some(json!({ "name": " pets-prod " })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["name"], "pets-prod");
+    assert_eq!(renamed["mcp_url"], "https://toolport.test/mcp/pets-prod");
+    let response = app.request(1, "GET", "/api/servers/pets/tools", None).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let (status, error) = app
+        .json(
+            1,
+            "PUT",
+            "/api/servers/pets-prod",
+            Some(json!({ "name": "shop" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"], "server_name_taken");
+
+    for bad in ["Bad Name", "", "with-tool"] {
+        let (status, error) = app
+            .json(
+                1,
+                "PUT",
+                "/api/servers/pets-prod",
+                Some(json!({ "name": bad })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+        assert_eq!(error["error"], "invalid_server_name");
+    }
+
+    // The same name again is not a change and not a conflict.
+    let response = app
+        .request(
+            1,
+            "PUT",
+            "/api/servers/pets-prod",
+            Some(json!({ "name": "pets-prod" })),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn names_of_other_users_are_taken_too(pool: PgPool) {
+    let app = App::new(pool.clone()).await;
+    app.request(1, "POST", "/api/servers", Some(json!({ "name": "pets" })))
+        .await;
+    common::create_user(&pool, 2, "mallory").await;
+    app.request(2, "POST", "/api/servers", Some(json!({ "name": "mine" })))
+        .await;
+    let (status, error) = app
+        .json(
+            2,
+            "PUT",
+            "/api/servers/mine",
+            Some(json!({ "name": "pets" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"], "server_name_taken");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn delete_removes_the_server_and_its_rows(pool: PgPool) {
+    let app = App::new(pool.clone()).await;
+    app.request(
+        1,
+        "POST",
+        "/api/servers",
+        Some(json!({ "name": "weather" })),
+    )
+    .await;
+    app.request(1, "POST", "/api/servers", Some(json!({ "name": "keep" })))
+        .await;
+    let body = json!({ "source": "template", "template": "weather" });
+    app.request(1, "POST", "/api/servers/weather/apis", Some(body))
+        .await;
+    app.request(
+        1,
+        "POST",
+        "/api/servers/weather/tokens",
+        Some(json!({ "name": "laptop" })),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO calls (server_id, tool, result, latency_ms)
+         SELECT id, 'getWeather', 'ok', 5 FROM servers WHERE name = 'weather'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app.request(1, "DELETE", "/api/servers/weather", None).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    for query in [
+        "SELECT count(*) FROM apis",
+        "SELECT count(*) FROM tools",
+        "SELECT count(*) FROM mcp_tokens",
+        "SELECT count(*) FROM calls",
+    ] {
+        let count: i64 = sqlx::query_scalar(query).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "{query}");
+    }
+    let (_, servers) = app.json(1, "GET", "/api/servers", None).await;
+    assert_eq!(servers.as_array().unwrap().len(), 1);
+    assert_eq!(servers[0]["name"], "keep");
+
+    let response = app.request(1, "DELETE", "/api/servers/weather", None).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn other_users_cannot_rename_or_delete_a_server(pool: PgPool) {
+    let app = App::new(pool.clone()).await;
+    app.request(1, "POST", "/api/servers", Some(json!({ "name": "pets" })))
+        .await;
+    common::create_user(&pool, 2, "mallory").await;
+
+    for (method, path, body) in [
+        (
+            "PUT",
+            "/api/servers/pets",
+            Some(json!({ "name": "stolen" })),
+        ),
+        ("DELETE", "/api/servers/pets", None),
+        (
+            "PUT",
+            "/api/servers/nope",
+            Some(json!({ "name": "stolen" })),
+        ),
+        ("DELETE", "/api/servers/nope", None),
+    ] {
+        let (status, error) = app.json(2, method, path, body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+        assert_eq!(error["error"], "not_found");
+    }
+    let (_, servers) = app.json(1, "GET", "/api/servers", None).await;
+    assert_eq!(servers[0]["name"], "pets");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn reserved_route_names_are_not_server_names(pool: PgPool) {
+    let app = App::new(pool).await;
+    let (status, error) = app
+        .json(
+            1,
+            "POST",
+            "/api/servers",
+            Some(json!({ "name": "with-tool" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "invalid_server_name");
+}

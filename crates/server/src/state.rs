@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use reqwest::Url;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use sqlx::PgPool;
 
 use crate::{
@@ -26,6 +27,7 @@ pub struct AppState {
     pub live: Arc<LiveHub>,
     pub secrets: Arc<SecretsKey>,
     pub peers: Arc<SessionPeers>,
+    pub mcp_sessions: Arc<LocalSessionManager>,
     pub upstream_timeout: Duration,
 }
 
@@ -72,9 +74,11 @@ impl AppState {
             live.clone(),
             peers.clone(),
         );
+        let mcp_sessions = Arc::new(LocalSessionManager::default());
         Ok(Self {
             live,
-            mcp: mcp::service(handler, &config.public_url),
+            mcp: mcp::service(handler, mcp_sessions.clone(), &config.public_url),
+            mcp_sessions,
             pool,
             auth: Arc::new(auth),
             upstream,

@@ -169,6 +169,25 @@ impl LiveHub {
         list.sort_by_key(|client| client.since_ms);
         list
     }
+
+    /// The number of connected clients per server id, for the server list.
+    pub fn client_counts(&self) -> HashMap<i64, i64> {
+        let now = now_ms();
+        let clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut counts = HashMap::new();
+        for (key, seen) in clients.iter() {
+            if now - seen.last_seen_ms < ACTIVE_MS {
+                *counts.entry(key.server_id).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    /// Removes the clients of a deleted server.
+    pub fn forget_server(&self, server_id: i64) {
+        let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
+        clients.retain(|key, _| key.server_id != server_id);
+    }
 }
 
 fn now_ms() -> i64 {

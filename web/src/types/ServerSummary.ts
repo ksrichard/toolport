@@ -4,4 +4,12 @@ export type ServerSummary = { name: string, mcp_url: string, apis: number, tools
 /**
  * Tokens that are not revoked and not expired.
  */
-active_tokens: number, };
+active_tokens: number, 
+/**
+ * Milliseconds since the Unix epoch. `None` when the server has no saved call.
+ */
+last_call_ms: number | null, 
+/**
+ * Clients with an MCP request in the last 2 minutes. The count is in memory only.
+ */
+connected_clients: number, };

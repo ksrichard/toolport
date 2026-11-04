@@ -31,7 +31,12 @@ function useNow(ms: number): number {
   return now
 }
 
-const time = (ms: number) => new Date(ms).toTimeString().slice(0, 8)
+/** Local date and time, for example 2026-11-04 14:03:22. */
+const dateTime = (ms: number) => {
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${d.toTimeString().slice(0, 8)}`
+}
 
 function ago(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -208,7 +213,7 @@ function CallLog({ live }: { live: LiveState }) {
           <table>
             <thead>
               <tr>
-                <th>Time</th>
+                <th>Date and time</th>
                 <th>Tool</th>
                 <th>Client</th>
                 <th>Status</th>
@@ -221,7 +226,7 @@ function CallLog({ live }: { live: LiveState }) {
                 const result = RESULTS[call.result]
                 return (
                   <tr key={call.id} className={live.fresh.has(call.id) ? 'new' : undefined}>
-                    <td className="mono">{time(call.at_ms)}</td>
+                    <td className="mono">{dateTime(call.at_ms)}</td>
                     <td className="mono">{call.tool}</td>
                     <td>{call.client_name ?? call.token_name ?? '–'}</td>
                     <td>

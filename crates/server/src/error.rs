@@ -113,6 +113,8 @@ pub enum ApiError {
     LastEnabledTool,
     #[error("a test without a server needs a draft API")]
     TestNeedsDraft,
+    #[error("the token is already revoked")]
+    TokenAlreadyRevoked,
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -162,7 +164,7 @@ impl ApiError {
             | Self::InvalidBaseUrl
             | Self::SpecTooLarge(_)
             | Self::SpecDownload(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::ServerNameTaken(_) => StatusCode::CONFLICT,
+            Self::ServerNameTaken(_) | Self::TokenAlreadyRevoked => StatusCode::CONFLICT,
             Self::Import(error) => match error {
                 ImportError::ToolNameTaken(_) | ImportError::ServerOwnedByOther(_) => {
                     StatusCode::CONFLICT
@@ -173,7 +175,9 @@ impl ApiError {
                 _ => StatusCode::UNPROCESSABLE_ENTITY,
             },
             Self::Token(error) => match error {
-                TokenError::EmptyName => StatusCode::UNPROCESSABLE_ENTITY,
+                TokenError::EmptyName | TokenError::NameTooLong(_) => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
                 TokenError::UnknownServer(_) => StatusCode::NOT_FOUND,
                 TokenError::Signing(_) | TokenError::Database(_) => {
                     StatusCode::INTERNAL_SERVER_ERROR
@@ -218,6 +222,7 @@ impl ApiError {
             },
             Self::InvalidServerName => "invalid_server_name",
             Self::ServerNameTaken(_) => "server_name_taken",
+            Self::TokenAlreadyRevoked => "token_already_revoked",
             Self::InvalidSpecUrl => "invalid_spec_url",
             Self::SpecNotText => "spec_not_text",
             Self::InvalidBaseUrl => "bad_base_url",
@@ -235,7 +240,7 @@ impl ApiError {
                 ImportError::Database(_) | ImportError::Hash(_) => "internal_error",
             },
             Self::Token(error) => match error {
-                TokenError::EmptyName => "invalid_token_name",
+                TokenError::EmptyName | TokenError::NameTooLong(_) => "invalid_token_name",
                 TokenError::UnknownServer(_) => "not_found",
                 TokenError::Signing(_) | TokenError::Database(_) => "internal_error",
             },

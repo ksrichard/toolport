@@ -272,6 +272,7 @@ impl ToolportMcp {
     ) {
         let first = FirstRequest {
             client_name,
+            token_id: caller.token_id,
             token_name: caller.token_name.clone(),
             method: method.to_owned(),
             tools_sent,

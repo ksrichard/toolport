@@ -1,5 +1,5 @@
-//! Tokens that MCP clients send to `/mcp/<server>`. The `mcp-token` binary manages them until
-//! the Tokens page exists.
+//! Tokens that MCP clients send to `/mcp/<server>`. The Tokens page and the `mcp-token`
+//! dev binary manage them.
 
 use std::time::Duration;
 
@@ -9,6 +9,8 @@ use crate::auth::{jwt::JwtKeys, refresh::random_hex};
 
 /// The default lifetime of a new token.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+
+pub const MAX_NAME_CHARS: usize = 64;
 
 /// The server updates `last_used_at` at most once in this time, so a busy client does not write on each call.
 const LAST_USED_STEP_SECS: f64 = 60.0;
@@ -45,6 +47,8 @@ pub enum TokenError {
     UnknownServer(String),
     #[error("the token name must not be empty")]
     EmptyName,
+    #[error("the token name must have at most {0} characters")]
+    NameTooLong(usize),
     #[error("cannot sign the token")]
     Signing(#[from] jsonwebtoken::errors::Error),
     #[error("the database query failed")]
@@ -74,6 +78,9 @@ pub async fn create(
     let name = name.trim();
     if name.is_empty() {
         return Err(TokenError::EmptyName);
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(TokenError::NameTooLong(MAX_NAME_CHARS));
     }
     let server_id: i64 = sqlx::query_scalar("SELECT id FROM servers WHERE name = $1")
         .bind(server)

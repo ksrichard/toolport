@@ -3,6 +3,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ApiError, createServer, createToken, getTemplates, importApi } from './api'
 import { ToolForm } from './Builder'
+import { snippet, WHERE, type Client } from './clientCommand'
+import { ClientTabs } from './ClientSnippet'
 import { CopyButton } from './CopyButton'
 import { useLiveStream } from './liveStream'
 import { useSpecSource } from './specSource'
@@ -15,7 +17,9 @@ import type { Template } from './types/Template'
 
 // The same rule as `is_valid_server_name` in crates/core/src/server_name.rs.
 const SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/
-const TOKEN_NAME = 'first-client'
+
+/** Token names need not be unique. The date tells two onboarding tokens apart on the Tokens page. */
+const tokenName = () => `first-client ${new Date().toISOString().slice(0, 10)}`
 
 type Step = 'pick' | 'name' | 'build' | 'connect'
 const STEPS: { id: Step; label: string }[] = [
@@ -60,7 +64,7 @@ export function Onboarding({ existing, onCancel, onChanged, onDone }: Onboarding
     setServer(created)
     onChanged()
     try {
-      setToken(await createToken(created.name, TOKEN_NAME))
+      setToken(await createToken(created.name, tokenName()))
     } catch (e) {
       // The connect step offers a button to create the token again.
       setError(e instanceof Error ? e.message : String(e))
@@ -213,7 +217,7 @@ function NameStep({ choice, existing, onBack, onCreated, onImported }: NameStepP
       setBusy('Making the tools')
       const imported = await importApi(name, source())
       setBusy('Creating a token')
-      const token = await createToken(name, TOKEN_NAME)
+      const token = await createToken(name, tokenName())
       onImported(imported, token)
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : String(e))
@@ -255,40 +259,6 @@ function NameStep({ choice, existing, onBack, onCreated, onImported }: NameStepP
   )
 }
 
-const CLIENTS = ['Claude Code', 'Cursor', 'Claude Desktop'] as const
-type Client = (typeof CLIENTS)[number]
-
-function snippet(client: Client, server: ServerSummary, token: string): string {
-  const auth = `Bearer ${token}`
-  switch (client) {
-    case 'Claude Code':
-      return `claude mcp add --transport http ${server.name} ${server.mcp_url} --header "Authorization: ${auth}"`
-    case 'Cursor':
-      return JSON.stringify({ mcpServers: { [server.name]: { url: server.mcp_url, headers: { Authorization: auth } } } }, null, 2)
-    case 'Claude Desktop':
-      // Claude Desktop config files start only local servers. mcp-remote forwards to the URL.
-      return JSON.stringify(
-        {
-          mcpServers: {
-            [server.name]: {
-              command: 'npx',
-              args: ['-y', 'mcp-remote', server.mcp_url, '--header', 'Authorization:${AUTH}'],
-              env: { AUTH: auth },
-            },
-          },
-        },
-        null,
-        2,
-      )
-  }
-}
-
-const WHERE: Record<Client, string> = {
-  'Claude Code': 'Run this command in a terminal.',
-  Cursor: 'Add this to ~/.cursor/mcp.json, then reload Cursor.',
-  'Claude Desktop': 'Add this to claude_desktop_config.json, then restart Claude Desktop.',
-}
-
 interface ConnectStepProps {
   server: ServerSummary
   imported: ImportedApi[]
@@ -309,7 +279,7 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
     setBusy(true)
     setError(null)
     try {
-      onToken(await createToken(server.name, TOKEN_NAME))
+      onToken(await createToken(server.name, tokenName()))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -335,22 +305,16 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
 
       {token ? (
         <>
-          <div className="skins" role="tablist" aria-label="MCP client">
-            {CLIENTS.map((c) => (
-              <button key={c} type="button" role="tab" aria-selected={client === c} aria-pressed={client === c} onClick={() => setClient(c)}>
-                {c}
-              </button>
-            ))}
-          </div>
+          <ClientTabs client={client} onChange={setClient} />
           <ConnectionBadge
             server={server.name}
-            tokenName={token.name}
+            tokenId={token.row.id}
             command={snippet(client, server, token.token)}
             hint={client === 'Claude Code' ? 'Paste this into your terminal:' : WHERE[client]}
           />
           <p className="note">
             The command contains a token. ToolPort shows it only now and does not store it. The token works for{' '}
-            {token.expires_in_days} days.
+            {token.expires_in_days} days. You can revoke it on the Tokens page.
           </p>
         </>
       ) : (
@@ -374,12 +338,12 @@ function ConnectStep({ server, imported, token, onToken, onDone }: ConnectStepPr
 }
 
 /** One card with two states. It flips to CONNECTED on the first MCP request of a new client. */
-function ConnectionBadge({ server, tokenName, command, hint }: { server: string; tokenName: string; command: string; hint: string }) {
+function ConnectionBadge({ server, tokenId, command, hint }: { server: string; tokenId: number; command: string; hint: string }) {
   const live = useLiveStream(server, false)
-  // Only a request with the token of this page counts.
-  const first = live.firstRequests.find((r) => r.token_name === tokenName)
+  // Only a request with the token of this page counts. Names are not unique, so match the id.
+  const first = live.firstRequests.find((r) => r.token_id === tokenId)
   // After a page reload, the snapshot still lists the client, but the first request event is gone.
-  const known = live.clients.find((c) => c.token_name === tokenName)
+  const known = live.clients.find((c) => c.token_id === tokenId)
   const client = first?.client_name ?? known?.client_name
   const connected = first !== undefined || known !== undefined
   const detail = first

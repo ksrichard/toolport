@@ -719,6 +719,8 @@ async fn live_stream_sends_a_snapshot_and_then_new_calls(pool: PgPool) {
     assert_eq!(snapshot["metrics"]["calls_per_minute"], 1);
     assert_eq!(snapshot["clients"][0]["client_name"], "test");
     assert_eq!(snapshot["clients"][0]["token_name"], "test");
+    let tokens = mcp_tokens::list(&state.pool, "pets").await.unwrap();
+    assert_eq!(snapshot["clients"][0]["token_id"], tokens[0].id);
 
     client.call("getPet", json!({ "id": "404" })).await;
     let (name, call) = events.next().await;
@@ -870,6 +872,8 @@ async fn first_request_sends_a_client_event(pool: PgPool) {
     assert_eq!(first["tools_sent"], 4);
     assert_eq!(first["client_name"], "test");
     assert_eq!(first["token_name"], "test");
+    let tokens = mcp_tokens::list(&state.pool, "pets").await.unwrap();
+    assert_eq!(first["token_id"], tokens[0].id);
 
     // The same client again sends no event, so the next event is the call.
     client.tool_names().await;

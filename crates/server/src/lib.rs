@@ -12,6 +12,7 @@ pub mod sessions;
 pub mod spec_check;
 pub mod state;
 pub mod templates;
+pub mod tokens;
 pub mod tools;
 pub mod upstream;
 pub mod upstream_guard;
@@ -29,6 +30,7 @@ pub fn app(state: AppState) -> Router {
         .merge(live::routes())
         .merge(servers::routes())
         .merge(tools::routes())
+        .merge(tokens::routes())
         .merge(spec_check::routes())
         .fallback(|| async { ApiError::NotFound });
     Router::new()

@@ -111,6 +111,8 @@ Config:
   `.env` is for host runs only.
 - `ALLOW_LOCAL_UPSTREAM` (default false) allows upstream calls to loopback addresses only. Use it
   for local dev and tests.
+- `SPEC_CHECK_INTERVAL_SECS` (default 3600) is the time between two runs of the spec check.
+  Each run checks the APIs whose daily check is on and whose last check is older than 24 hours.
 - `.env.example` lists every variable. CI checks that the Compose file is valid
   (`docker compose config`).
 
@@ -198,8 +200,9 @@ Each milestone ends with working code, tests, and a short demo.
    Add an optional daily check for each API from a URL. The server downloads the spec once a day.
    When the spec changed, it re-imports with the same rule and sends `list_changed`. The APIs page
    shows the time and result of the last check. The check is off by default.
-   Both need a new column with the spec URL of each API. Today ToolPort stores only the spec text.
-   Status: the upstream auth part is done. The APIs page is not.
+   Status: done. The spec URL is stored only for a URL import. A re-import from a file removes
+   the URL and turns the check off. The check runs in the server process, so tests call
+   `check_due_apis` directly. It records `unchanged`, `updated`, or `failed` for each API.
 10. Tokens page. Create, name, and revoke tokens. Show the last use of each token.
 11. All servers page. Create, rename, and delete servers. Show a short status for each.
 12. Hardening. Encrypt upstream secrets at rest. Add rate limits per token. Delete old call

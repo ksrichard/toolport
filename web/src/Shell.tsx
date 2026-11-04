@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getServers, setTheme, signOut, type Theme, type User } from './api'
 import { Brand } from './Brand'
+import { Apis } from './Apis'
 import { Builder } from './Builder'
 import { Live } from './Live'
 import { Onboarding } from './Onboarding'
@@ -18,7 +19,7 @@ interface Page {
 
 const PAGES: Page[] = [
   { path: '/', label: 'Live', milestone: 7, summary: '' },
-  { path: '/apis', label: 'APIs', milestone: 9, summary: 'Import OpenAPI specs and set the upstream base URL and auth.' },
+  { path: '/apis', label: 'APIs', milestone: 9, summary: '' },
   { path: '/tools', label: 'Tools', milestone: 8, summary: '' },
   { path: '/tokens', label: 'Tokens', milestone: 10, summary: 'Create and revoke the tokens that MCP clients use to connect.' },
   { path: '/servers', label: 'All servers', milestone: 11, summary: 'Create, rename, and delete your MCP servers.' },
@@ -173,7 +174,9 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
         navigate={navigate}
         onChanged={reloadServers}
       />
-    ) : page.path === '/tools' ? (
+    ) : page.path === '/apis' ? (
+        <Apis key={selected.name} server={selected.name} onChanged={reloadServers} />
+      ) : page.path === '/tools' ? (
         <Tools key={selected.name} server={selected.name} navigate={navigate} onChanged={reloadServers} />
       ) : page.path === '/' ? (
         <Live

@@ -13,6 +13,7 @@ import { SpecSourceFields } from './SpecSourceFields'
 import type { ApiView } from './types/ApiView'
 import type { ImportedApi } from './types/ImportedApi'
 import type { Template } from './types/Template'
+import { PixelScenes } from './PixelScenes'
 
 const message = (error: unknown) => (error instanceof ApiError || error instanceof Error ? error.message : String(error))
 
@@ -53,6 +54,7 @@ export function Apis({ server, onChanged }: ApisProps) {
           <h1>APIs</h1>
           <div className="sub">Each API has one base URL and one auth for all its tools.</div>
         </div>
+        <PixelScenes />
         <div className="head-actions">
           {!adding && (
             <button className="btn primary" type="button" onClick={() => setAdding(true)}>

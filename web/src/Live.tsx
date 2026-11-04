@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CopyButton } from './CopyButton'
 import { useCallLogAnimation, useListAnimation } from './motion'
+import { PixelScenes } from './PixelScenes'
 import { BUCKET_MS, CHART_BUCKETS, useLiveStream, type LiveState, type StreamStatus } from './liveStream'
 import type { CallResult } from './types/CallResult'
 import type { ServerSummary } from './types/ServerSummary'
@@ -58,6 +59,9 @@ export function Live({ server, onConnectClient, onOpenTool, onToolsChanged }: Li
   const [paused, setPaused] = useState(false)
   const live = useLiveStream(server.name, paused)
   const now = useNow(BUCKET_MS)
+  const newest = live.calls[0]
+  const hint =
+    newest && live.fresh.has(newest.id) ? { id: newest.id, tool: newest.tool, failed: newest.result !== 'ok' } : null
 
   return (
     <>
@@ -72,6 +76,7 @@ export function Live({ server, onConnectClient, onOpenTool, onToolsChanged }: Li
             </span>
           </div>
         </div>
+        <PixelScenes paused={paused} hint={hint} />
         <div className="head-actions">
           <div className="endpoint">
             <code>{server.mcp_url}</code>

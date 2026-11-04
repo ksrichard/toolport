@@ -4,6 +4,7 @@ import { useListAnimation } from './motion'
 import { ToolSwitch } from './ToolSwitch'
 import { useToolList, type ToolList } from './toolList'
 import type { ToolSummary } from './types/ToolSummary'
+import { PixelScenes } from './PixelScenes'
 
 interface ToolsProps {
   server: string
@@ -36,6 +37,7 @@ export function Tools({ server, navigate, onChanged }: ToolsProps) {
             {list.tools ? `${on} of ${tools.length} on. ` : ''}AI clients do not see tools that are off.
           </div>
         </div>
+        <PixelScenes />
         <div className="head-actions">
           <button className="btn primary" type="button" onClick={() => navigate(toolUrl('new'))}>
             New tool

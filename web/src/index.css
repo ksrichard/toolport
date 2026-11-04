@@ -226,7 +226,6 @@ tr.new td { animation: flash 1.2s ease-out; }
 .chip { font: 13px var(--f-data); padding: 8px 16px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
 .steps li[aria-current="step"] .chip { color: var(--fg); border-color: var(--ok); }
 :root[data-theme="neon"] .chip { border-radius: 0; }
-.eta { font: 600 2.2rem/1 var(--f-data); color: var(--ok); }
 
 .wizard { display: grid; gap: 16px; padding: 24px; }
 .field { display: grid; gap: 6px; }

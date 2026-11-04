@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
+import { CallsPanel } from './CallChart'
 import { CopyButton } from './CopyButton'
 import { useCallLogAnimation, useListAnimation } from './motion'
 import { PixelScenes } from './PixelScenes'
-import { BUCKET_MS, CHART_BUCKETS, useLiveStream, type LiveState, type StreamStatus } from './liveStream'
+import { BUCKET_MS, useLiveStream, type LiveState, type StreamStatus } from './liveStream'
 import type { CallResult } from './types/CallResult'
 import type { ServerSummary } from './types/ServerSummary'
 import { ToolSwitch } from './ToolSwitch'
@@ -110,22 +111,7 @@ export function Live({ server, onConnectClient, onOpenTool, onToolsChanged }: Li
 
       <div className="grid2">
         <div className="col">
-          <section className="panel chart">
-            <h2>
-              Calls over time
-              <small className="legend">
-                <span>
-                  <i />
-                  calls / 5 s
-                </span>
-                <span>
-                  <i className="e" />
-                  errors
-                </span>
-              </small>
-            </h2>
-            <Chart buckets={live.buckets} now={now} />
-          </section>
+          <CallsPanel server={server.name} live={live} now={now} paused={paused} />
           <CallLog live={live} />
         </div>
         <div className="col">
@@ -168,41 +154,6 @@ function Kpis({ live }: { live: LiveState }) {
         <div className="delta">active in the last 2 min</div>
       </div>
     </section>
-  )
-}
-
-function Chart({ buckets, now }: { buckets: LiveState['buckets']; now: number }) {
-  const W = 600
-  const H = 120
-  const pad = 18
-  const last = Math.floor(now / BUCKET_MS) * BUCKET_MS
-  const series = Array.from({ length: CHART_BUCKETS }, (_, i) => {
-    const start = last - (CHART_BUCKETS - 1 - i) * BUCKET_MS
-    return buckets.get(start) ?? { calls: 0, errors: 0 }
-  })
-  const max = Math.max(8, ...series.map((b) => b.calls))
-  const x = (i: number) => (i / (CHART_BUCKETS - 1)) * W
-  const y = (v: number) => H - pad - (v / max) * (H - pad - 6)
-  const points = series.map((b, i) => `${x(i).toFixed(1)},${y(b.calls).toFixed(1)}`).join(' ')
-  const mid = Math.round(max / 2)
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Calls per 5 seconds over the last 5 minutes">
-      <line className="grid" x1="0" x2={W} y1={y(0)} y2={y(0)} />
-      <line className="grid" x1="0" x2={W} y1={y(mid)} y2={y(mid)} strokeDasharray="2 4" />
-      <text className="axis" x="4" y={y(mid) - 4}>
-        {mid}
-      </text>
-      <text className="axis" x="4" y={H - 4}>
-        5 min ago
-      </text>
-      <text className="axis" x={W - 4} y={H - 4} textAnchor="end">
-        now
-      </text>
-      <polygon className="area" points={`0,${y(0)} ${points} ${W},${y(0)}`} />
-      <polyline className="lineP" points={points} />
-      {series.map((b, i) => (b.errors > 0 ? <circle key={i} className="errs" cx={x(i)} cy={y(b.calls)} r="3" /> : null))}
-      <circle className="end" cx={x(CHART_BUCKETS - 1) - 3} cy={y(series[CHART_BUCKETS - 1].calls)} r="3.5" />
-    </svg>
   )
 }
 

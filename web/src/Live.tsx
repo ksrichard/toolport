@@ -3,7 +3,9 @@ import { CallsPanel } from './CallChart'
 import { CopyButton } from './CopyButton'
 import { useCallLogAnimation, useListAnimation } from './motion'
 import { PixelScenes } from './PixelScenes'
-import { BUCKET_MS, useLiveStream, type LiveState, type StreamStatus } from './liveStream'
+import { getCallPage } from './api'
+import { BUCKET_MS, MAX_CALLS, useLiveStream, type LiveState, type StreamStatus } from './liveStream'
+import type { CallRecord } from './types/CallRecord'
 import type { CallResult } from './types/CallResult'
 import type { ServerSummary } from './types/ServerSummary'
 import { ToolSwitch } from './ToolSwitch'
@@ -112,7 +114,7 @@ export function Live({ server, onConnectClient, onOpenTool, onToolsChanged }: Li
       <div className="grid2">
         <div className="col">
           <CallsPanel server={server.name} live={live} now={now} paused={paused} />
-          <CallLog live={live} />
+          <CallLog server={server.name} live={live} />
         </div>
         <div className="col">
           <Clients live={live} now={now} />
@@ -157,15 +159,123 @@ function Kpis({ live }: { live: LiveState }) {
   )
 }
 
-function CallLog({ live }: { live: LiveState }) {
+const PAGE_SIZES = [10, 20, 50]
+const DEFAULT_ROWS = 20
+
+/** The browser remembers the page size. It is a convenience only, so errors are ignored. */
+const ROWS_KEY = 'toolport.callLogRows'
+function loadRows(): number {
+  try {
+    const saved = Number(localStorage.getItem(ROWS_KEY))
+    return PAGE_SIZES.includes(saved) ? saved : DEFAULT_ROWS
+  } catch {
+    return DEFAULT_ROWS
+  }
+}
+function saveRows(rows: number) {
+  try {
+    localStorage.setItem(ROWS_KEY, String(rows))
+  } catch {
+    // Private windows can block storage.
+  }
+}
+
+/** An older page. It does not change after it loads. */
+interface OlderPage {
+  calls: CallRecord[]
+  hasMore: boolean
+}
+
+/** Page 1 shows the newest calls from the SSE stream. Older pages load from the call route. */
+function CallLog({ server, live }: { server: string; live: LiveState }) {
   const rowsRef = useCallLogAnimation()
+  const [rows, setRows] = useState(loadRows)
+  // The older pages that the user opened, page 2 first.
+  const [older, setOlder] = useState<OlderPage[]>([])
+  // The newest call id when the user left page 1. Newer calls count as new.
+  const [leftAt, setLeftAt] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const first = live.calls.slice(0, rows)
+  // The stream keeps MAX_CALLS calls. When it holds that many, the server can have more.
+  const firstHasMore = live.calls.length > rows || live.calls.length >= MAX_CALLS
+  const page = older.length + 1
+  const current = older.at(-1)
+  const shown = current ? current.calls : first
+  const hasMore = current ? current.hasMore : firstHasMore
+  const newCalls = leftAt === null ? 0 : live.calls.filter((c) => c.id > leftAt).length
+
+  const backToLatest = () => {
+    setOlder([])
+    setLeftAt(null)
+    setError(null)
+  }
+
+  const chooseRows = (value: number) => {
+    setRows(value)
+    saveRows(value)
+    backToLatest()
+  }
+
+  const loadOlder = async () => {
+    const last = shown.at(-1)
+    if (!last) return
+    setBusy(true)
+    setError(null)
+    try {
+      const next = await getCallPage(server, rows, last.id)
+      if (page === 1) setLeftAt(live.calls[0]?.id ?? null)
+      setOlder((list) => [...list, { calls: next.calls, hasMore: next.has_more }])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const newer = () => {
+    if (page === 2) backToLatest()
+    else setOlder((list) => list.slice(0, -1))
+  }
+
+  const from = (page - 1) * rows + 1
+  const range = shown.length === 0 ? `Page ${page}` : `Calls ${from}–${from + shown.length - 1}`
+
   return (
-    <section className="panel">
+    <section className="panel call-log">
       <h2>
-        Call log <small>newest first</small>
+        <span>
+          Call log <small>newest first</small>
+        </span>
+        <label className="rows-pick">
+          <small>Rows</small>
+          <select value={rows} onChange={(e) => chooseRows(Number(e.target.value))}>
+            {PAGE_SIZES.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
       </h2>
-      {live.calls.length === 0 ? (
-        <p className="muted">No calls yet. Ask your AI client to use one of the tools.</p>
+      {error && (
+        <p className="alert" role="alert">
+          Could not load the calls: {error}
+        </p>
+      )}
+      {newCalls > 0 && (
+        <p className="new-calls">
+          {newCalls >= MAX_CALLS ? `${MAX_CALLS}+` : newCalls} new {newCalls === 1 ? 'call' : 'calls'}.{' '}
+          <button className="link" type="button" onClick={backToLatest}>
+            Back to the latest
+          </button>
+        </p>
+      )}
+      {shown.length === 0 ? (
+        <p className="muted">
+          {page === 1 ? 'No calls yet. Ask your AI client to use one of the tools.' : 'No older calls.'}
+        </p>
       ) : (
         <div className="scroll">
           <table>
@@ -179,11 +289,12 @@ function CallLog({ live }: { live: LiveState }) {
                 <th className="num">Latency</th>
               </tr>
             </thead>
-            <tbody ref={rowsRef}>
-              {live.calls.map((call) => {
+            {/* A new key per page, so a page change does not animate every row. */}
+            <tbody key={page} ref={page === 1 ? rowsRef : undefined}>
+              {shown.map((call) => {
                 const result = RESULTS[call.result]
                 return (
-                  <tr key={call.id} className={live.fresh.has(call.id) ? 'new' : undefined}>
+                  <tr key={call.id} className={page === 1 && live.fresh.has(call.id) ? 'new' : undefined}>
                     <td className="mono">{dateTime(call.at_ms)}</td>
                     <td className="mono">{call.tool}</td>
                     <td>{call.client_name ?? call.token_name ?? '–'}</td>
@@ -197,6 +308,17 @@ function CallLog({ live }: { live: LiveState }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+      {(page > 1 || hasMore) && (
+        <div className="pager">
+          <button className="btn" type="button" onClick={newer} disabled={page === 1 || busy}>
+            Newer
+          </button>
+          <span className="muted">{range}</span>
+          <button className="btn" type="button" onClick={loadOlder} disabled={!hasMore || busy || shown.length === 0}>
+            {busy ? 'Loading…' : 'Older'}
+          </button>
         </div>
       )}
     </section>

@@ -195,6 +195,11 @@ Each milestone ends with working code, tests, and a short demo.
    `GET /api/servers/{name}/calls/series?window=1h|24h|7d|30d`. It returns every bucket, also the
    empty ones, in buckets of 1 min, 15 min, 1 h, or 6 h. The chart loads it again every 30 s
    and soon after new calls.
+   The call log has pages of 10, 20, or 50 rows (default 20, the browser remembers it). Page 1
+   comes from the SSE stream, which keeps the newest 50 calls, so it stays live. Older pages use
+   `GET /api/servers/{name}/calls?limit=10|20|50&before=<call id>`, which returns
+   `{calls, has_more}`. It pages by call id, not OFFSET, so an older page does not change while
+   new calls arrive. On an older page, a hint counts the new calls and links back to page 1.
    In the Neon theme, `web/src/PixelScenes.tsx` plays a short pixel-art scene in the free space of
    the page header every 30–60 s. The × button turns the scenes off for this browser.
    Tool builder. Status: done. Pages: `/servers/<name>/tools/new` and

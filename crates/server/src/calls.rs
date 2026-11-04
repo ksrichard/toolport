@@ -121,6 +121,15 @@ impl SeriesWindow {
     }
 }
 
+/// One page of the call log, the newest call first.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct CallPage {
+    pub calls: Vec<CallRecord>,
+    /// True when the server has calls that are older than the last call of this page.
+    pub has_more: bool,
+}
+
 /// The calls of one server over a long window. It has every bucket, also the empty ones.
 #[derive(Debug, Clone, Serialize, PartialEq, TS)]
 #[ts(export)]
@@ -179,6 +188,32 @@ pub async fn recent(
     .bind(limit)
     .fetch_all(pool)
     .await
+}
+
+/// The calls with an id below `before`, the newest first. The paging uses the id and not
+/// OFFSET, so new calls do not move the rows of an older page.
+pub async fn page(
+    pool: &PgPool,
+    server_id: i64,
+    before: Option<i64>,
+    limit: i64,
+) -> Result<CallPage, sqlx::Error> {
+    let mut calls: Vec<CallRecord> = sqlx::query_as(concat!(
+        "SELECT ",
+        record_columns!(),
+        " FROM calls c
+         WHERE c.server_id = $1 AND ($2::bigint IS NULL OR c.id < $2)
+         ORDER BY c.id DESC LIMIT $3"
+    ))
+    .bind(server_id)
+    .bind(before)
+    // One extra row tells if an older page exists.
+    .bind(limit + 1)
+    .fetch_all(pool)
+    .await?;
+    let has_more = calls.len() as i64 > limit;
+    calls.truncate(usize::try_from(limit).unwrap_or(0));
+    Ok(CallPage { calls, has_more })
 }
 
 pub async fn metrics(pool: &PgPool, server_id: i64) -> Result<Metrics, sqlx::Error> {

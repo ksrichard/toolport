@@ -13,7 +13,8 @@ import type { Snapshot } from './types/Snapshot'
 
 export const BUCKET_MS = 5_000
 export const CHART_BUCKETS = 60
-const MAX_CALLS = 50
+/** The stream keeps this many calls. It is the largest page of the call log. */
+export const MAX_CALLS = 50
 const RETRY_MS = 3_000
 
 export type StreamStatus = 'connecting' | 'live' | 'paused' | 'reconnecting' | 'failed'

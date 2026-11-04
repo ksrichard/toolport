@@ -2,6 +2,7 @@
 // that JavaScript cannot read. The browser sends it only to /auth/*.
 
 import type { ApiView } from './types/ApiView'
+import type { CallPage } from './types/CallPage'
 import type { CallSeries } from './types/CallSeries'
 import type { CreateServerWithTool } from './types/CreateServerWithTool'
 import type { CreateToken } from './types/CreateToken'
@@ -125,6 +126,9 @@ export const renameServer = (name: string, newName: string) => {
 }
 
 export const deleteServer = (name: string) => api<void>(server(name), { method: 'DELETE' })
+
+export const getCallPage = (name: string, limit: number, before: number) =>
+  api<CallPage>(`${server(name)}/calls?limit=${limit}&before=${before}`)
 
 export const getCallSeries = (name: string, window: SeriesWindow) =>
   api<CallSeries>(`${server(name)}/calls/series?window=${window}`)

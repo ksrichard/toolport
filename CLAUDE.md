@@ -162,8 +162,7 @@ Each milestone ends with working code, tests, and a short demo.
    It keeps edited tools and the `enabled` flag, and removes tools whose operation is gone.
 4. Tokens. Make MCP clients send a JWT as a bearer token. Check the signature, the expiry,
    and the `jti` row. Show the token value once, at creation. Allow revoke.
-   Status: done. Until the Tokens page exists, the `mcp-token` binary creates, lists, and
-   revokes tokens. A missing token, a bad token, and an unknown server all get the same 401.
+   Status: done. The `mcp-token` dev binary also creates, lists, and revokes tokens. A missing token, a bad token, and an unknown server all get the same 401.
 5. Call log and metrics. Save every call. Compute calls per minute, error rate, p50 and
    p95 latency, and open sessions. Send new calls and metrics to the dashboard over SSE.
    Status: done. `GET /api/servers/{name}/live` sends `snapshot`, `call`, and `metrics`
@@ -204,6 +203,9 @@ Each milestone ends with working code, tests, and a short demo.
    the URL and turns the check off. The check runs in the server process, so tests call
    `check_due_apis` directly. It records `unchanged`, `updated`, or `failed` for each API.
 10. Tokens page. Create, name, and revoke tokens. Show the last use of each token.
+    Status: done. `GET`/`POST /api/servers/{name}/tokens` list and create tokens, and
+    `POST /api/servers/{name}/tokens/{id}/revoke` revokes one. Revoked tokens stay in the list.
+    The last use updates at most once a minute. The onboarding badge matches its token by id.
 11. All servers page. Create, rename, and delete servers. Show a short status for each.
 12. Hardening. Encrypt upstream secrets at rest. Add rate limits per token. Delete old call
     rows after a set time.

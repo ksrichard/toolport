@@ -1,8 +1,9 @@
 // APIs page: the APIs of the server with their base URL, auth, and spec source.
-// A spec API can be imported again, from its URL or from a new file.
+// A spec API can be imported again, from its URL or from a new file. Any API can be removed
+// with its tools, while one enabled tool stays on the server.
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { ApiError, getApis, getTemplates, importApi, reimportApi, setAutoCheck } from './api'
+import { ApiError, getApis, getTemplates, importApi, reimportApi, removeApi, setAutoCheck } from './api'
 import { authOf, isApiDirty, saveApiEdit, type AuthState } from './apiAuth'
 import { AuthFields } from './AuthFields'
 import { Row } from './Builder'
@@ -83,6 +84,11 @@ export function Apis({ server, onChanged }: ApisProps) {
           api={api}
           onSaved={(saved) => setApis((list) => list?.map((a) => (a.id === saved.id ? saved : a)) ?? null)}
           onReimported={(result) => imported('Re-import', [result])}
+          onRemoved={() => {
+            setReport(null)
+            load()
+            onChanged()
+          }}
         />
       ))}
     </div>
@@ -94,14 +100,16 @@ interface ApiCardProps {
   api: ApiView
   onSaved: (api: ApiView) => void
   onReimported: (result: ImportedApi) => void
+  onRemoved: () => void
 }
 
-function ApiCard({ server, api, onSaved, onReimported }: ApiCardProps) {
+function ApiCard({ server, api, onSaved, onReimported, onRemoved }: ApiCardProps) {
   const [baseUrl, setBaseUrl] = useState(api.base_url)
   const [auth, setAuth] = useState<AuthState>(authOf(api))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState(false)
   const isSpec = api.kind === 'spec'
   const dirty = isApiDirty(api, baseUrl, auth)
 
@@ -137,6 +145,18 @@ function ApiCard({ server, api, onSaved, onReimported }: ApiCardProps) {
       onSaved(await setAutoCheck(server, api.id, enabled))
     })
 
+  const remove = () =>
+    run(async () => {
+      try {
+        await removeApi(server, api.id)
+      } finally {
+        setConfirmRemove(false)
+      }
+      onRemoved()
+    })
+
+  const toolCount = `${api.tool_count} ${api.tool_count === 1 ? 'tool' : 'tools'}`
+
   return (
     <section className="panel form">
       <h2>
@@ -144,9 +164,7 @@ function ApiCard({ server, api, onSaved, onReimported }: ApiCardProps) {
           <span>{api.name}</span>
           <span className="method">{isSpec ? 'spec' : 'hand-made'}</span>
         </span>
-        <small>
-          {api.tool_count} {api.tool_count === 1 ? 'tool' : 'tools'}
-        </small>
+        <small>{toolCount}</small>
       </h2>
       {error && (
         <p className="alert" role="alert">
@@ -192,8 +210,26 @@ function ApiCard({ server, api, onSaved, onReimported }: ApiCardProps) {
           </small>
         </Row>
       )}
+      {confirmRemove && (
+        <div className="actions">
+          <span className="muted">
+            Remove {api.name} and its {toolCount}? Open MCP sessions lose these tools. The call log stays.
+          </span>
+          <button className="btn" type="button" onClick={() => setConfirmRemove(false)} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn danger" type="button" onClick={remove} disabled={busy}>
+            {busy ? 'Removing…' : 'Yes, remove'}
+          </button>
+        </div>
+      )}
       <div className="actions">
         {status && <span className="muted">{status}</span>}
+        {!confirmRemove && (
+          <button className="btn" type="button" onClick={() => setConfirmRemove(true)} disabled={busy} aria-label={`Remove ${api.name}`}>
+            Remove
+          </button>
+        )}
         {isSpec &&
           (api.spec_url ? (
             <button className="btn" type="button" onClick={() => reimport()} disabled={busy}>

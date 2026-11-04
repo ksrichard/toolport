@@ -136,6 +136,13 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
   const route = builderRoute(path)
   const selected =
     servers?.find((s) => s.name === (route?.server ?? selectedName)) ?? servers?.[0] ?? null
+  const selectedTitle = selected?.name
+  useEffect(() => {
+    document.title = selectedTitle ? `ToolPort · ${selectedTitle}` : 'ToolPort'
+    return () => {
+      document.title = 'ToolPort'
+    }
+  }, [selectedTitle])
   const finishOnboarding = (name: string) => {
     select(name)
     reloadServers()

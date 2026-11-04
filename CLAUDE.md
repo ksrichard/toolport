@@ -215,6 +215,10 @@ Each milestone ends with working code, tests, and a short demo.
     The last use updates at most once a minute. The onboarding badge matches its token by id.
     The Create form offers a lifetime select, and the table shows the expiry date, "never", or "expired".
 11. All servers page. Create, rename, and delete servers. Show a short status for each.
+    Status: done. `PUT /api/servers/{name}` renames a server, and `DELETE /api/servers/{name}` deletes
+    it with its APIs, tools, tokens, and calls. Both close the open MCP sessions of the server. After a
+    rename the tokens stay valid, and the old URL gives the same 401 as an unknown server. The name
+    `with-tool` is reserved, because `POST /api/servers/with-tool` is a fixed route.
 12. Hardening. Encrypt upstream secrets at rest. Add rate limits per token. Delete old call
     rows after a set time.
     Status: the encryption of upstream secrets is done. Rate limits and call-row cleanup are not.

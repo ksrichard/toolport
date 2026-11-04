@@ -36,6 +36,7 @@ use the same shell, panels, and tokens.
 - MCP clients (milestone 4): each token is a JWT with the server id, a unique `jti`, and its
   own audience. The server checks that the `jti` row exists and is not revoked, so revoke
   works at once. The token value shows once, at creation. The DB stores only the `jti`.
+  Each token has a lifetime of 1 to 365 days (default 90) or never. A token that never expires has no `exp`.
 - Logs: `tracing` with JSON output.
 - Frontend: React + Vite + TypeScript. Plain CSS with the mockup's CSS variables. No UI kit.
   `@formkit/auto-animate` animates items that lists add, remove, and move. It is small and has no
@@ -210,6 +211,7 @@ Each milestone ends with working code, tests, and a short demo.
     Status: done. `GET`/`POST /api/servers/{name}/tokens` list and create tokens, and
     `POST /api/servers/{name}/tokens/{id}/revoke` revokes one. Revoked tokens stay in the list.
     The last use updates at most once a minute. The onboarding badge matches its token by id.
+    The Create form offers a lifetime select, and the table shows the expiry date, "never", or "expired".
 11. All servers page. Create, rename, and delete servers. Show a short status for each.
 12. Hardening. Encrypt upstream secrets at rest. Add rate limits per token. Delete old call
     rows after a set time.
@@ -238,7 +240,7 @@ Each milestone ends with working code, tests, and a short demo.
 - Backend: `cargo run -p server` (`-- --help` lists the settings)
 - Import a spec into a server (dev tool): `cargo run -p server --bin import-spec -- --owner <github-login>
   --server <name> --spec <file-or-url> [--base-url <url>]`. The owner must have signed in once.
-- MCP tokens (dev tool): `cargo run -p server --bin mcp-token -- create --server <name> --name <label>`,
+- MCP tokens (dev tool): `cargo run -p server --bin mcp-token -- create --server <name> --name <label> [--days <n> | --never]`,
   also `list --server <name>` and `revoke --id <id>`. It needs `JWT_SECRET` from `.env`.
 - Checks: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
   (the tests need Postgres and `DATABASE_URL`)

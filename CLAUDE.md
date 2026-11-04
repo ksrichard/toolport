@@ -202,6 +202,8 @@ Each milestone ends with working code, tests, and a short demo.
    Status: done. The spec URL is stored only for a URL import. A re-import from a file removes
    the URL and turns the check off. The check runs in the server process, so tests call
    `check_due_apis` directly. It records `unchanged`, `updated`, or `failed` for each API.
+   `DELETE /api/servers/{name}/apis/{id}` removes an API and its tools. The call log stays.
+   The server refuses with `last_enabled_tool` when no enabled tool would remain.
 10. Tokens page. Create, name, and revoke tokens. Show the last use of each token.
     Status: done. `GET`/`POST /api/servers/{name}/tokens` list and create tokens, and
     `POST /api/servers/{name}/tokens/{id}/revoke` revokes one. Revoked tokens stay in the list.

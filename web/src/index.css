@@ -158,6 +158,8 @@ td { padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap
 td.mono, .mono { font-family: var(--f-data); font-size: 12px; }
 th.num, td.num { text-align: right; }
 tr:last-child td { border-bottom: 0; }
+td .line { justify-content: flex-end; }
+.cell-error { color: var(--bad); white-space: normal; }
 tr.new td { animation: flash 1.2s ease-out; }
 @keyframes flash { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } to { background: transparent; } }
 .method { font: 600 11px var(--f-data); padding: 1px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); }

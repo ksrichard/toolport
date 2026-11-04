@@ -16,6 +16,7 @@ import type { Template } from './types/Template'
 import type { Theme } from './types/Theme'
 import type { TestRequest } from './types/TestRequest'
 import type { TestResult } from './types/TestResult'
+import type { TokenView } from './types/TokenView'
 import type { ToolSummary } from './types/ToolSummary'
 import type { ToolView } from './types/ToolView'
 import type { User } from './types/User'
@@ -118,8 +119,13 @@ export const getTools = (name: string) => api<ToolSummary[]>(`${server(name)}/to
 export const importApi = (name: string, source: ImportApi) =>
   api<ImportedApi[]>(`${server(name)}/apis`, { method: 'POST', body: JSON.stringify(source) })
 
+export const getTokens = (name: string) => api<TokenView[]>(`${server(name)}/tokens`)
+
 export const createToken = (name: string, tokenName: string) =>
   api<NewToken>(`${server(name)}/tokens`, { method: 'POST', body: JSON.stringify({ name: tokenName }) })
+
+export const revokeToken = (name: string, id: number) =>
+  api<TokenView>(`${server(name)}/tokens/${id}/revoke`, { method: 'POST' })
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
 const toolPath = (name: string, tool: string) => `${server(name)}/tools/${encodeURIComponent(tool)}`

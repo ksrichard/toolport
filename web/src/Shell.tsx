@@ -7,6 +7,7 @@ import { Apis } from './Apis'
 import { Builder } from './Builder'
 import { Live } from './Live'
 import { Onboarding } from './Onboarding'
+import { Tokens } from './Tokens'
 import { Tools } from './Tools'
 import type { ServerSummary } from './types/ServerSummary'
 
@@ -21,7 +22,7 @@ const PAGES: Page[] = [
   { path: '/', label: 'Live', milestone: 7, summary: '' },
   { path: '/apis', label: 'APIs', milestone: 9, summary: '' },
   { path: '/tools', label: 'Tools', milestone: 8, summary: '' },
-  { path: '/tokens', label: 'Tokens', milestone: 10, summary: 'Create and revoke the tokens that MCP clients use to connect.' },
+  { path: '/tokens', label: 'Tokens', milestone: 10, summary: '' },
   { path: '/servers', label: 'All servers', milestone: 11, summary: 'Create, rename, and delete your MCP servers.' },
 ]
 
@@ -178,6 +179,8 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
         <Apis key={selected.name} server={selected.name} onChanged={reloadServers} />
       ) : page.path === '/tools' ? (
         <Tools key={selected.name} server={selected.name} navigate={navigate} onChanged={reloadServers} />
+      ) : page.path === '/tokens' ? (
+        <Tokens key={selected.name} server={selected} onChanged={reloadServers} />
       ) : page.path === '/' ? (
         <Live
           key={selected.name}

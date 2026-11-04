@@ -4,4 +4,4 @@ export type ConnectedClient = {
 /**
  * The name from the MCP `initialize` request, for example `claude-ai`.
  */
-client_name: string | null, token_name: string, since_ms: number, last_seen_ms: number, };
+client_name: string | null, token_id: number, token_name: string, since_ms: number, last_seen_ms: number, };

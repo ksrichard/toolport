@@ -1,4 +1,4 @@
-//! Creates, lists, and revokes MCP client tokens. This is a dev tool until the Tokens page exists.
+//! Creates, lists, and revokes MCP client tokens from the command line.
 
 use std::{process::ExitCode, time::Duration};
 

@@ -3,7 +3,11 @@
 /**
  * The first MCP request of a new client. The onboarding page shows it as "connected".
  */
-export type FirstRequest = { client_name: string | null, token_name: string, 
+export type FirstRequest = { client_name: string | null, 
+/**
+ * The onboarding page matches its own token by id, because token names are not unique.
+ */
+token_id: number, token_name: string, 
 /**
  * The MCP method, for example `tools/list`.
  */

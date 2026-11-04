@@ -55,6 +55,9 @@ pub enum LiveEvent {
 #[ts(export)]
 pub struct FirstRequest {
     pub client_name: Option<String>,
+    /// The onboarding page matches its own token by id, because token names are not unique.
+    #[ts(type = "number")]
+    pub token_id: i64,
     pub token_name: String,
     /// The MCP method, for example `tools/list`.
     pub method: String,
@@ -82,6 +85,8 @@ struct ClientSeen {
 pub struct ConnectedClient {
     /// The name from the MCP `initialize` request, for example `claude-ai`.
     pub client_name: Option<String>,
+    #[ts(type = "number")]
+    pub token_id: i64,
     pub token_name: String,
     #[ts(type = "number")]
     pub since_ms: i64,
@@ -155,6 +160,7 @@ impl LiveHub {
             .filter(|(key, seen)| key.server_id == server_id && now - seen.last_seen_ms < ACTIVE_MS)
             .map(|(key, seen)| ConnectedClient {
                 client_name: key.client_name.clone(),
+                token_id: key.token_id,
                 token_name: seen.token_name.clone(),
                 since_ms: seen.since_ms,
                 last_seen_ms: seen.last_seen_ms,

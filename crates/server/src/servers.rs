@@ -1,4 +1,4 @@
-//! Dashboard routes for servers, their tools, API imports, and new tokens.
+//! Dashboard routes for servers, their tools, and API imports.
 //! The onboarding uses them to go from an empty account to a working MCP server.
 
 use axum::{
@@ -18,7 +18,6 @@ use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
     import::{ImportReport, ImportRequest, Owner, import_spec},
-    mcp_tokens::{self, DEFAULT_TTL},
     state::AppState,
     templates::{self, TEMPLATES, Template},
 };
@@ -112,24 +111,6 @@ pub struct SkippedTool {
     pub reason: String,
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export)]
-pub struct CreateToken {
-    pub name: String,
-}
-
-/// The only response that contains the token value.
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct NewToken {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub name: String,
-    pub token: String,
-    #[ts(type = "number")]
-    pub expires_in_days: u64,
-}
-
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/templates", get(list_templates))
@@ -139,7 +120,6 @@ pub fn routes() -> Router<AppState> {
             "/servers/{name}/apis",
             post(import_api).layer(DefaultBodyLimit::max(MAX_SPEC_BYTES)),
         )
-        .route("/servers/{name}/tokens", post(create_token))
 }
 
 /// Returns the id of a server that the user owns. Another user's server gives 404, not 403,
@@ -357,22 +337,4 @@ pub(crate) async fn download_spec(state: &AppState, url: &Url) -> Result<String,
         bytes.extend_from_slice(&chunk);
     }
     String::from_utf8(bytes).map_err(|_| DownloadError::NotText)
-}
-
-async fn create_token(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(name): Path<String>,
-    ApiJson(body): ApiJson<CreateToken>,
-) -> Result<(StatusCode, Json<NewToken>), ApiError> {
-    owned_server_id(&state.pool, auth.user_id, &name).await?;
-    let created =
-        mcp_tokens::create(&state.pool, &state.auth.jwt, &name, &body.name, DEFAULT_TTL).await?;
-    let token = NewToken {
-        id: created.id,
-        name: body.name.trim().to_owned(),
-        token: created.value,
-        expires_in_days: DEFAULT_TTL.as_secs() / 86_400,
-    };
-    Ok((StatusCode::CREATED, Json(token)))
 }

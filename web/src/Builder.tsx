@@ -256,7 +256,6 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
   }, [server, initialApiId])
 
   const api = apis?.find((a) => a.id === apiId)
-  const apiIsSpec = api !== undefined && api.kind !== 'manual'
   const apiDirty =
     api !== undefined &&
     (baseUrl !== api.base_url ||
@@ -340,7 +339,8 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       selectApi(list, created.id)
       return created.id
     }
-    if (api && api.kind === 'manual' && apiDirty) {
+    // A spec API keeps its name, but its base URL and auth can change.
+    if (api && apiDirty) {
       const updated = await updateApi(srv, api.id, { name: api.name, base_url: baseUrl.trim(), auth: authInput(auth) })
       const list = (apis ?? []).map((a) => (a.id === updated.id ? updated : a))
       setApis(list)
@@ -401,7 +401,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       if (body !== undefined && bodySample !== '') args.body = sampleValue({ input_type: 'complex' }, bodySample)
       let testApi: TestApi
       if (apiId === null) testApi = { kind: 'draft', base_url: baseUrl.trim(), auth: authInput(auth) }
-      else testApi = { kind: 'saved', id: apiId, auth: apiIsSpec || !apiDirty ? undefined : authInput(auth) }
+      else testApi = { kind: 'saved', id: apiId, auth: apiDirty ? authInput(auth) : undefined }
       const stored = initial ? initial.draft.name : undefined
       const request = {
         draft: buildDraft(),
@@ -482,7 +482,6 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                 className="grow"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                readOnly={apiIsSpec}
                 placeholder="https://api.open-meteo.com"
                 aria-label="API base URL"
               />
@@ -538,42 +537,36 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
           </Row>
 
           <Row label="auth">
-            {apiIsSpec ? (
-              <span className="muted">Set on the API. A spec API is read-only here.</span>
-            ) : (
-              <>
-                <div className="line">
-                  <select value={auth.type} onChange={(e) => setAuth({ ...auth, type: e.target.value as AuthType, secret: '' })} aria-label="Auth type">
-                    <option value="none">none</option>
-                    <option value="api_key">API key header</option>
-                    <option value="bearer">bearer token</option>
-                  </select>
-                  {auth.type === 'api_key' && (
-                    <input className="grow" value={auth.header} onChange={(e) => setAuth({ ...auth, header: e.target.value })} placeholder="X-API-Key" aria-label="Auth header name" />
-                  )}
-                  {auth.type !== 'none' &&
-                    (secretSaved ? (
-                      <>
-                        <span className="pill ok">set</span>
-                        <button className="btn" type="button" onClick={() => setAuth({ ...auth, replacing: true })}>
-                          Replace
-                        </button>
-                      </>
-                    ) : (
-                      <input
-                        className="grow"
-                        type="password"
-                        autoComplete="off"
-                        value={auth.secret}
-                        onChange={(e) => setAuth({ ...auth, secret: e.target.value })}
-                        placeholder="Secret"
-                        aria-label="Auth secret"
-                      />
-                    ))}
-                </div>
-                <small>This auth applies to every tool of this API.</small>
-              </>
-            )}
+            <div className="line">
+              <select value={auth.type} onChange={(e) => setAuth({ ...auth, type: e.target.value as AuthType, secret: '' })} aria-label="Auth type">
+                <option value="none">none</option>
+                <option value="api_key">API key header</option>
+                <option value="bearer">bearer token</option>
+              </select>
+              {auth.type === 'api_key' && (
+                <input className="grow" value={auth.header} onChange={(e) => setAuth({ ...auth, header: e.target.value })} placeholder="X-API-Key" aria-label="Auth header name" />
+              )}
+              {auth.type !== 'none' &&
+                (secretSaved ? (
+                  <>
+                    <span className="pill ok">set</span>
+                    <button className="btn" type="button" onClick={() => setAuth({ ...auth, replacing: true })}>
+                      Replace
+                    </button>
+                  </>
+                ) : (
+                  <input
+                    className="grow"
+                    type="password"
+                    autoComplete="off"
+                    value={auth.secret}
+                    onChange={(e) => setAuth({ ...auth, secret: e.target.value })}
+                    placeholder="Secret"
+                    aria-label="Auth secret"
+                  />
+                ))}
+            </div>
+            <small>This auth applies to every tool of this API.</small>
           </Row>
 
           <Row label="inputs">
@@ -606,7 +599,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
                           </select>
                         </td>
                         <td>
-                          <input type="checkbox" checked={r.required} onChange={(e) => patchRow(i, { required: e.target.checked })} disabled={complex || inPath} aria-label="Required" />
+                          <input type="checkbox" checked={r.required} onChange={(e) => patchRow(i, { required: e.target.checked })} disabled={fixed || inPath} aria-label="Required" />
                         </td>
                         <td>
                           <input value={r.description} onChange={(e) => patchRow(i, { description: e.target.value })} readOnly={fixed} aria-label="Input description" />

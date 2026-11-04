@@ -2,6 +2,7 @@ use std::{process::ExitCode, time::Duration};
 
 use clap::Parser;
 use server::{
+    calls,
     config::Config,
     error::{StartupError, error_chain},
     spec_check,
@@ -10,6 +11,8 @@ use server::{
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
+
+const CALL_CLEANUP_INTERVAL: Duration = Duration::from_secs(3600);
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -49,6 +52,11 @@ async fn run(config: Config) -> Result<(), StartupError> {
     spec_check::spawn_daily_check(
         state.clone(),
         Duration::from_secs(config.spec_check_interval_secs),
+    );
+    calls::spawn_cleanup(
+        state.pool.clone(),
+        config.call_retention_days,
+        CALL_CLEANUP_INTERVAL,
     );
     axum::serve(listener, server::app(state))
         .with_graceful_shutdown(shutdown_signal())

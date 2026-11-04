@@ -12,10 +12,11 @@ use reqwest::Url;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, JsonObject,
-        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, Extensions, Implementation,
+        JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+        Tool,
     },
-    service::RequestContext,
+    service::{NotificationContext, Peer, RequestContext},
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
@@ -40,7 +41,11 @@ pub type McpService = StreamableHttpService<ToolportMcp, LocalSessionManager>;
 
 /// rmcp accepts only loopback `Host` headers by default, to block DNS rebinding.
 /// Behind Caddy the `Host` header is the public domain, so we allow that host too.
-pub fn service(handler: ToolportMcp, public_url: &Url) -> McpService {
+pub fn service(
+    handler: ToolportMcp,
+    sessions: Arc<LocalSessionManager>,
+    public_url: &Url,
+) -> McpService {
     let mut hosts = vec![
         "localhost".to_owned(),
         "127.0.0.1".to_owned(),
@@ -53,11 +58,7 @@ pub fn service(handler: ToolportMcp, public_url: &Url) -> McpService {
         }
     }
     let config = StreamableHttpServerConfig::default().with_allowed_hosts(hosts);
-    StreamableHttpService::new(
-        move || Ok(handler.clone()),
-        Arc::new(LocalSessionManager::default()),
-        config,
-    )
+    StreamableHttpService::new(move || Ok(handler.clone()), sessions, config)
 }
 
 /// Route layer for `/mcp/{server}`. It checks the token and adds the `McpCaller` to the request.
@@ -159,16 +160,16 @@ impl ToolportMcp {
         }
     }
 
-    /// Remembers the session, so a tool change can notify it later.
-    fn register_peer(&self, caller: &McpCaller, context: &RequestContext<RoleServer>) {
-        let session = context
-            .extensions
+    /// Remembers the session, so a tool change can notify it, and a rename or a delete of
+    /// the server can close it.
+    fn register_peer(&self, caller: &McpCaller, extensions: &Extensions, peer: &Peer<RoleServer>) {
+        let session = extensions
             .get::<Parts>()
             .and_then(|parts| parts.headers.get("mcp-session-id"))
             .and_then(|value| value.to_str().ok());
         if let Some(session) = session {
             self.peers
-                .register(caller.server_id, session.to_owned(), context.peer.clone());
+                .register(caller.server_id, session.to_owned(), peer.clone());
         }
     }
 
@@ -292,13 +293,19 @@ impl ServerHandler for ToolportMcp {
         .with_server_info(Implementation::new("toolport", env!("CARGO_PKG_VERSION")))
     }
 
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        if let Ok(caller) = mcp_caller(&context.extensions) {
+            self.register_peer(&caller, &context.extensions, &context.peer);
+        }
+    }
+
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let caller = mcp_caller(&context)?;
-        self.register_peer(&caller, &context);
+        let caller = mcp_caller(&context.extensions)?;
+        self.register_peer(&caller, &context.extensions, &context.peer);
         let client = client_name(&context);
         let is_new = self.live.seen(&caller, client.as_deref());
         let tools = self.tools(&caller).await?;
@@ -314,8 +321,8 @@ impl ServerHandler for ToolportMcp {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let caller = mcp_caller(&context)?;
-        self.register_peer(&caller, &context);
+        let caller = mcp_caller(&context.extensions)?;
+        self.register_peer(&caller, &context.extensions, &context.peer);
         let client = client_name(&context);
         if self.live.seen(&caller, client.as_deref()) {
             self.announce(&caller, client.clone(), "tools/call", None);
@@ -328,9 +335,8 @@ impl ServerHandler for ToolportMcp {
     }
 }
 
-fn mcp_caller(context: &RequestContext<RoleServer>) -> Result<McpCaller, CallError> {
-    context
-        .extensions
+fn mcp_caller(extensions: &Extensions) -> Result<McpCaller, CallError> {
+    extensions
         .get::<Parts>()
         .and_then(|parts| parts.extensions.get::<McpCaller>())
         .cloned()

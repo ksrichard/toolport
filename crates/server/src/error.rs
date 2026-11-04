@@ -54,7 +54,7 @@ pub enum ApiError {
     #[error("an internal error happened")]
     Encode(#[source] axum::Error),
     #[error(
-        "the server name is not valid, use 1 to 63 lowercase letters, digits, and `-`, and start with a letter or digit"
+        "the server name is not valid, use 1 to 63 lowercase letters, digits, and `-`, start with a letter or digit, and do not use a reserved name such as `with-tool`"
     )]
     InvalidServerName,
     #[error("the server name {0} is already in use")]

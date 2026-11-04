@@ -924,3 +924,100 @@ async fn client_event_goes_only_to_its_own_server(pool: PgPool) {
     assert_eq!(name, "client");
     assert_eq!(first["token_name"], "other-token");
 }
+
+/// Sends a dashboard request as user 1, the owner of `pets`.
+async fn dashboard(
+    app: &Router,
+    state: &AppState,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Response {
+    let access = state.auth.jwt.issue_access(1).unwrap();
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {access}"))
+        .header(header::CONTENT_TYPE, "application/json");
+    let body = body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
+    app.clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn has_session(state: &AppState, session: &str) -> bool {
+    state
+        .mcp_sessions
+        .sessions
+        .read()
+        .await
+        .contains_key(session)
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn server_list_counts_connected_clients_and_the_last_call(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    client.call("getPet", json!({ "id": "1" })).await;
+
+    let response = dashboard(&app, &state, "GET", "/api/servers", None).await;
+    let servers = common::json_body(response).await;
+    assert_eq!(servers[0]["connected_clients"], 1);
+    assert!(servers[0]["last_call_ms"].as_i64().unwrap() > 0);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn rename_moves_the_mcp_url(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    assert!(has_session(&state, &client.session).await);
+
+    let response = dashboard(
+        &app,
+        &state,
+        "PUT",
+        "/api/servers/pets",
+        Some(json!({ "name": "animals" })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The old URL looks like an unknown server, and the old session is closed.
+    assert_unauthorized(client.send("tools/list", json!({})).await).await;
+    assert_unauthorized(initialize_with(&app, "pets", Some(&client.token)).await).await;
+    assert!(!has_session(&state, &client.session).await);
+
+    // The same token works on the new URL.
+    let moved = Client::connect_with(&app, "animals", client.token.clone()).await;
+    assert_eq!(moved.tool_names().await.len(), 4);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn delete_stops_the_tokens_and_closes_the_sessions(pool: PgPool) {
+    let (app, state) = setup(pool, 10_000).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    client.tool_names().await;
+
+    let response = dashboard(&app, &state, "DELETE", "/api/servers/pets", None).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    assert!(!has_session(&state, &client.session).await);
+    assert_unauthorized(client.send("tools/list", json!({})).await).await;
+    assert_unauthorized(initialize_with(&app, "pets", Some(&client.token)).await).await;
+
+    // A new server with the old name does not accept the old token.
+    let response = dashboard(
+        &app,
+        &state,
+        "POST",
+        "/api/servers",
+        Some(json!({ "name": "pets" })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_unauthorized(initialize_with(&app, "pets", Some(&client.token)).await).await;
+
+    let response = dashboard(&app, &state, "GET", "/api/servers", None).await;
+    assert_eq!(common::json_body(response).await[0]["connected_clients"], 0);
+}

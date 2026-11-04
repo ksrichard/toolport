@@ -1,11 +1,17 @@
+/// Names that are also fixed dashboard routes, for example `POST /api/servers/with-tool`.
+/// A server with such a name could not be renamed or deleted through `/api/servers/{name}`.
+pub const RESERVED_SERVER_NAMES: &[&str] = &["with-tool"];
+
 /// A server name is one URL path segment in `/mcp/<name>`.
 /// The rule: 1 to 63 characters, lowercase letters, digits, and `-`, and it starts with a letter or digit.
+/// A reserved name is not valid.
 pub fn is_valid_server_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
     };
-    name.len() <= 63
+    !RESERVED_SERVER_NAMES.contains(&name)
+        && name.len() <= 63
         && (first.is_ascii_lowercase() || first.is_ascii_digit())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
@@ -29,5 +35,6 @@ mod tests {
         assert!(!is_valid_server_name("pet/store"));
         assert!(!is_valid_server_name("pet store"));
         assert!(!is_valid_server_name(&"a".repeat(64)));
+        assert!(!is_valid_server_name("with-tool"));
     }
 }

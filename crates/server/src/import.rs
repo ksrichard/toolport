@@ -48,7 +48,7 @@ pub struct ImportReport {
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
     #[error(
-        "the server name {0} is not valid, use 1 to 63 lowercase letters, digits, and `-`, and start with a letter or digit"
+        "the server name {0} is not valid, use 1 to 63 lowercase letters, digits, and `-`, start with a letter or digit, and do not use a reserved name such as `with-tool`"
     )]
     InvalidServerName(String),
     #[error(transparent)]

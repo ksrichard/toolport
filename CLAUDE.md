@@ -183,7 +183,7 @@ Each milestone ends with working code, tests, and a short demo.
    The tool switches stay read-only until milestone 8. `cargo test` writes the API types to
    `web/src/types/` (ts-rs), and CI fails when they are out of date.
    In the Neon theme, `web/src/PixelScenes.tsx` plays a short pixel-art scene in the free space of
-   the page header every 30–60 s. `?pixels=demo` plays them back to back. The × button turns the scenes off for this browser.
+   the page header every 30–60 s. The × button turns the scenes off for this browser.
    Tool builder. Status: done. Pages: `/servers/<name>/tools/new` and
    `/servers/<name>/tools/<tool>`. The builder edits hand-made, template, and imported tools.
    The preview is the exact `tools/list` JSON. Test shows the MCP result and the raw HTTP, with

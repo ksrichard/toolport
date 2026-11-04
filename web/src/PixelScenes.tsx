@@ -5,10 +5,8 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } 
 
 const OFF_KEY = 'toolport.pixelScenes'
 const SCENE_MS = 5_000
-// `?pixels=demo` in the URL plays the scenes one after another, to check them.
-const DEMO = new URLSearchParams(window.location.search).get('pixels') === 'demo'
-const FIRST_DELAY: [number, number] = DEMO ? [500, 500] : [3_000, 6_000]
-const DELAY: [number, number] = DEMO ? [1_000, 1_000] : [30_000, 60_000]
+const FIRST_DELAY: [number, number] = [3_000, 6_000]
+const DELAY: [number, number] = [30_000, 60_000]
 const MAX_LABEL = 10
 
 type SceneName = 'delivery' | 'plug' | 'pingpong' | 'thinking' | 'timeout'

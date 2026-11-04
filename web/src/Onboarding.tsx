@@ -5,6 +5,8 @@ import { ApiError, createServer, createToken, getTemplates, importApi } from './
 import { ToolForm } from './Builder'
 import { CopyButton } from './CopyButton'
 import { useLiveStream } from './liveStream'
+import { useSpecSource } from './specSource'
+import { SpecSourceFields } from './SpecSourceFields'
 import type { ImportApi } from './types/ImportApi'
 import type { ImportedApi } from './types/ImportedApi'
 import type { NewToken } from './types/NewToken'
@@ -188,23 +190,15 @@ interface NameStepProps {
 
 function NameStep({ choice, existing, onBack, onCreated, onImported }: NameStepProps) {
   const [name, setName] = useState(existing?.name ?? (choice.kind === 'template' ? choice.template.server_name : ''))
-  const [specMode, setSpecMode] = useState<'url' | 'file'>('url')
-  const [specUrl, setSpecUrl] = useState('')
-  const [specFile, setSpecFile] = useState<{ name: string; text: string } | null>(null)
-  const [baseUrl, setBaseUrl] = useState('')
+  const spec = useSpecSource()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const nameValid = SERVER_NAME.test(name)
-  const specReady = choice.kind === 'template' || (specMode === 'url' ? specUrl.trim() !== '' : specFile !== null)
+  const specReady = choice.kind === 'template' || spec.ready
 
-  const source = (): ImportApi => {
-    if (choice.kind === 'template') return { source: 'template', template: choice.template.id }
-    const base = baseUrl.trim() || undefined
-    return specMode === 'url'
-      ? { source: 'url', spec_url: specUrl.trim(), base_url: base }
-      : { source: 'text', spec: specFile?.text ?? '', base_url: base }
-  }
+  const source = (): ImportApi =>
+    choice.kind === 'template' ? { source: 'template', template: choice.template.id } : spec.source()
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -246,54 +240,7 @@ function NameStep({ choice, existing, onBack, onCreated, onImported }: NameStepP
         </small>
       </label>
 
-      {choice.kind === 'own' && (
-        <>
-          <div className="skins" role="group" aria-label="Spec source">
-            <button type="button" aria-pressed={specMode === 'url'} onClick={() => setSpecMode('url')}>
-              From a URL
-            </button>
-            <button type="button" aria-pressed={specMode === 'file'} onClick={() => setSpecMode('file')}>
-              From a file
-            </button>
-          </div>
-          {specMode === 'url' ? (
-            <label className="field">
-              <span>Spec URL</span>
-              <input
-                type="url"
-                placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-                value={specUrl}
-                onChange={(e) => setSpecUrl(e.target.value)}
-                disabled={busy !== null}
-              />
-            </label>
-          ) : (
-            <label className="field">
-              <span>Spec file (JSON)</span>
-              <input
-                type="file"
-                accept=".json,application/json"
-                disabled={busy !== null}
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  setSpecFile(file ? { name: file.name, text: await file.text() } : null)
-                }}
-              />
-            </label>
-          )}
-          <label className="field">
-            <span>Base URL (optional)</span>
-            <input
-              type="url"
-              placeholder="The first server URL in the spec"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              disabled={busy !== null}
-            />
-            <small>ToolPort sends the tool calls to this URL. Only OpenAPI 3.0 JSON specs work for now.</small>
-          </label>
-        </>
-      )}
+      {choice.kind === 'own' && <SpecSourceFields spec={spec} disabled={busy !== null} />}
 
       {error && <p className="alert" role="alert">{error}</p>}
       <div className="actions">

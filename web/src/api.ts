@@ -6,9 +6,11 @@ import type { CreateServerWithTool } from './types/CreateServerWithTool'
 import type { ImportApi } from './types/ImportApi'
 import type { ImportedApi } from './types/ImportedApi'
 import type { NewToken } from './types/NewToken'
+import type { ReimportApi } from './types/ReimportApi'
 import type { SaveApi } from './types/SaveApi'
 import type { SaveTool } from './types/SaveTool'
 import type { ServerSummary } from './types/ServerSummary'
+import type { SetAutoCheck } from './types/SetAutoCheck'
 import type { SetToolEnabled } from './types/SetToolEnabled'
 import type { Template } from './types/Template'
 import type { Theme } from './types/Theme'
@@ -129,6 +131,13 @@ export const createManualApi = (name: string, body: SaveApi) =>
 
 export const updateApi = (name: string, id: number, body: SaveApi) =>
   api<ApiView>(`${server(name)}/apis/${id}`, json('PUT', body))
+
+/** Without a spec text, the server downloads the spec URL of the API again. */
+export const reimportApi = (name: string, id: number, body: ReimportApi) =>
+  api<ImportedApi>(`${server(name)}/apis/${id}/reimport`, json('POST', body))
+
+export const setAutoCheck = (name: string, id: number, enabled: boolean) =>
+  api<ApiView>(`${server(name)}/apis/${id}/auto-check`, json('PUT', { enabled } satisfies SetAutoCheck))
 
 export const getTool = (name: string, tool: string) => api<ToolView>(toolPath(name, tool))
 

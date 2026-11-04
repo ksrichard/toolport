@@ -14,12 +14,12 @@ import {
   resetTool,
   testDraftTool,
   testTool,
-  updateApi,
   updateTool,
 } from './api'
+import { authInput, authOf, isApiDirty, saveApiEdit, type AuthState } from './apiAuth'
+import { AuthFields } from './AuthFields'
 import { parseQueryTemplate, pathPlaceholders, schemaFromRows, toolJson } from './inputs'
 import type { ApiView } from './types/ApiView'
-import type { AuthInput } from './types/AuthInput'
 import type { HeaderRow } from './types/HeaderRow'
 import type { HttpMethod } from './types/HttpMethod'
 import type { InputRow } from './types/InputRow'
@@ -42,33 +42,8 @@ const SECRET_HEADER_MESSAGE = 'Put credentials in the API auth, not in a fixed h
 const isInputValue = (value: string) => /^\{[^{}]*\}$/.test(value)
 
 const INPUT_TYPES: InputType[] = ['string', 'number', 'integer', 'boolean', 'string_array', 'complex']
-const AUTH_TYPES = ['none', 'api_key', 'bearer'] as const
-type AuthType = (typeof AUTH_TYPES)[number]
 
 export type Saved = { kind: 'tool'; tool: ToolView; reset?: boolean } | { kind: 'server'; server: ServerSummary }
-
-interface AuthState {
-  type: AuthType
-  header: string
-  secret: string
-  /** True when the user wants to type a new secret for a saved one. */
-  replacing: boolean
-}
-
-const authOf = (api: ApiView | undefined): AuthState => ({
-  type: api?.auth.type ?? 'none',
-  header: api?.auth.type === 'api_key' ? api.auth.header : 'X-API-Key',
-  secret: '',
-  replacing: false,
-})
-
-/** The secret is sent only when the user typed one. */
-function authInput(auth: AuthState): AuthInput {
-  const secret = auth.secret === '' ? undefined : auth.secret
-  if (auth.type === 'api_key') return { type: 'api_key', header: auth.header, secret }
-  if (auth.type === 'bearer') return { type: 'bearer', secret }
-  return { type: 'none' }
-}
 
 const message = (error: unknown) => (error instanceof ApiError || error instanceof Error ? error.message : String(error))
 
@@ -256,12 +231,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
   }, [server, initialApiId])
 
   const api = apis?.find((a) => a.id === apiId)
-  const apiDirty =
-    api !== undefined &&
-    (baseUrl !== api.base_url ||
-      auth.type !== api.auth.type ||
-      (auth.type === 'api_key' && api.auth.type === 'api_key' && auth.header !== api.auth.header) ||
-      auth.secret !== '')
+  const apiDirty = api !== undefined && isApiDirty(api, baseUrl, auth)
 
   // ---- derived values ----
   const filledRows = rows.filter((r) => r.name.trim() !== '').map((r) => ({ ...r, name: r.name.trim() }))
@@ -339,9 +309,8 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
       selectApi(list, created.id)
       return created.id
     }
-    // A spec API keeps its name, but its base URL and auth can change.
     if (api && apiDirty) {
-      const updated = await updateApi(srv, api.id, { name: api.name, base_url: baseUrl.trim(), auth: authInput(auth) })
+      const updated = await saveApiEdit(srv, api, baseUrl, auth)
       const list = (apis ?? []).map((a) => (a.id === updated.id ? updated : a))
       setApis(list)
       selectApi(list, updated.id)
@@ -416,9 +385,6 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
   // ---- row helpers ----
   const patchRow = (i: number, patch: Partial<InputRow>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const patchHeader = (i: number, patch: Partial<HeaderRow>) => setHeaders(headers.map((h, j) => (j === i ? { ...h, ...patch } : h)))
-
-  const secretSaved =
-    api !== undefined && auth.type === api.auth.type && 'secret_set' in api.auth && api.auth.secret_set && !auth.replacing
 
   return (
     <div className="builder">
@@ -537,35 +503,7 @@ export function ToolForm({ server, initial, onSaved, onDeleted, onboarding = fal
           </Row>
 
           <Row label="auth">
-            <div className="line">
-              <select value={auth.type} onChange={(e) => setAuth({ ...auth, type: e.target.value as AuthType, secret: '' })} aria-label="Auth type">
-                <option value="none">none</option>
-                <option value="api_key">API key header</option>
-                <option value="bearer">bearer token</option>
-              </select>
-              {auth.type === 'api_key' && (
-                <input className="grow" value={auth.header} onChange={(e) => setAuth({ ...auth, header: e.target.value })} placeholder="X-API-Key" aria-label="Auth header name" />
-              )}
-              {auth.type !== 'none' &&
-                (secretSaved ? (
-                  <>
-                    <span className="pill ok">set</span>
-                    <button className="btn" type="button" onClick={() => setAuth({ ...auth, replacing: true })}>
-                      Replace
-                    </button>
-                  </>
-                ) : (
-                  <input
-                    className="grow"
-                    type="password"
-                    autoComplete="off"
-                    value={auth.secret}
-                    onChange={(e) => setAuth({ ...auth, secret: e.target.value })}
-                    placeholder="Secret"
-                    aria-label="Auth secret"
-                  />
-                ))}
-            </div>
+            <AuthFields auth={auth} onChange={setAuth} api={api} />
             <small>This auth applies to every tool of this API.</small>
           </Row>
 
@@ -718,7 +656,7 @@ function sampleValue(row: Pick<InputRow, 'input_type'>, text: string): unknown {
   }
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+export function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="row">
       <div className="lbl">{label}</div>

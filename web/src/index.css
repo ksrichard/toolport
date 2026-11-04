@@ -309,6 +309,12 @@ tr.new td { animation: flash 1.2s ease-out; }
 .tool-name .mono { font-size: 13px; overflow-wrap: anywhere; }
 .tool-path { overflow-wrap: anywhere; }
 .tool-desc { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-url { font-size: 12px; overflow-wrap: anywhere; }
+.file-btn { cursor: pointer; }
+.file-btn input { display: none; }
+.file-btn.disabled { opacity: .55; pointer-events: none; }
+.report { display: grid; gap: 12px; flex: 1 1 20rem; min-width: 0; }
+.report h2 { margin-bottom: 4px; }
 @media (max-width: 1080px) {
   .builder-grid { grid-template-columns: 1fr; }
   .builder-grid .arrow { display: none; }

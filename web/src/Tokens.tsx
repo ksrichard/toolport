@@ -25,7 +25,7 @@ function relative(ms: number, now: number): string {
 
 function status(token: TokenView, now: number): { label: string; tone: string } {
   if (token.revoked_ms !== null) return { label: 'revoked', tone: 'bad' }
-  if (token.expires_ms <= now) return { label: 'expired', tone: 'warn' }
+  if (token.expires_ms !== null && token.expires_ms <= now) return { label: 'expired', tone: 'warn' }
   return { label: 'active', tone: 'ok' }
 }
 
@@ -261,7 +261,8 @@ function CreatedToken({ server, token, onClose }: { server: ServerSummary; token
   return (
     <section className="panel wizard" aria-live="polite">
       <h2>
-        Token {token.row.name} <small>works for {token.expires_in_days} days</small>
+        Token {token.row.name}{' '}
+        <small>{token.expires_in_days === null ? 'never expires' : `works for ${token.expires_in_days} days`}</small>
       </h2>
       <p className="alert">Copy the token now. ToolPort does not store it and cannot show it again.</p>
       <div className="snippet">

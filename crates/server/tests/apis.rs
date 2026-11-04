@@ -591,11 +591,16 @@ const HOST: &str = "toolport.test";
 /// Opens an MCP session on `things` and returns its notification stream.
 async fn notification_stream(app: &App) -> Body {
     let ttl = std::time::Duration::from_secs(3600);
-    let token =
-        server::mcp_tokens::create(&app.state.pool, &app.state.auth.jwt, "things", "t", ttl)
-            .await
-            .unwrap()
-            .value;
+    let token = server::mcp_tokens::create(
+        &app.state.pool,
+        &app.state.auth.jwt,
+        "things",
+        "t",
+        Some(ttl),
+    )
+    .await
+    .unwrap()
+    .value;
     let post = |session: Option<String>, body: Value| {
         let mut request = Request::post("/mcp/things")
             .header(header::HOST, HOST)

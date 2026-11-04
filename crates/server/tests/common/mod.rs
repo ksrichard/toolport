@@ -55,12 +55,14 @@ pub async fn fake_github() -> String {
     format!("http://{addr}")
 }
 
+pub const JWT_SECRET: &str = "test-secret-that-is-at-least-32-characters";
+
 pub fn config(github_url: &str) -> Config {
     Config::try_parse_from([
         "toolport-server",
         "--database-url=postgres://unused",
         "--public-url=https://toolport.test",
-        "--jwt-secret=test-secret-that-is-at-least-32-characters",
+        &format!("--jwt-secret={JWT_SECRET}"),
         &format!("--secrets-key={}", "0".repeat(64)),
         "--allow-local-upstream",
         "--github-client-id=test-client-id",

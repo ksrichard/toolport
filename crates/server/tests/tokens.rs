@@ -237,3 +237,130 @@ async fn mcp_request_sets_the_last_use(pool: PgPool) {
     let last_used = app.list().await[0]["last_used_ms"].as_i64();
     assert!(last_used.unwrap() >= created["row"]["created_ms"].as_i64().unwrap());
 }
+
+impl App {
+    async fn create_with(&self, days: Value) -> (StatusCode, Value) {
+        self.json(
+            1,
+            "POST",
+            "/api/servers/pets/tokens",
+            Some(json!({ "name": "t", "expires_in_days": days })),
+        )
+        .await
+    }
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn each_lifetime_gives_its_expiry(pool: PgPool) {
+    let app = App::new(pool).await;
+    for days in [7, 30, 90, 180, 365] {
+        let (status, created) = app.create_with(json!(days)).await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        assert_eq!(created["expires_in_days"], days);
+        let row = &created["row"];
+        let life = row["expires_ms"].as_i64().unwrap() - row["created_ms"].as_i64().unwrap();
+        assert!((life - days * DAY_MS).abs() < 5_000, "{days}: {life}");
+        let claims = app
+            .state
+            .auth
+            .jwt
+            .verify_mcp(created["token"].as_str().unwrap())
+            .unwrap();
+        let exp_ms = claims.exp.unwrap() as i64 * 1000;
+        assert!((exp_ms - row["expires_ms"].as_i64().unwrap()).abs() < 5_000);
+    }
+
+    // A missing field gives the default.
+    let created = app.create("default").await;
+    assert_eq!(created["expires_in_days"], 90);
+    let row = &created["row"];
+    let life = row["expires_ms"].as_i64().unwrap() - row["created_ms"].as_i64().unwrap();
+    assert!((life - 90 * DAY_MS).abs() < 5_000);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn out_of_range_lifetimes_are_refused(pool: PgPool) {
+    let app = App::new(pool).await;
+    for days in [0, -1, -365, 366, 100_000] {
+        let (status, error) = app.create_with(json!(days)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{days}");
+        assert_eq!(error["error"], "invalid_token_lifetime");
+    }
+    let (status, error) = app.create_with(json!("never")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"], "invalid_body");
+    assert_eq!(app.list().await, json!([]));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn never_expiring_token_works_until_revoke(pool: PgPool) {
+    let app = App::new(pool).await;
+    let (status, created) = app.create_with(Value::Null).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["expires_in_days"], Value::Null);
+    assert_eq!(created["row"]["expires_ms"], Value::Null);
+    let token = created["token"].as_str().unwrap();
+    assert_eq!(app.state.auth.jwt.verify_mcp(token).unwrap().exp, None);
+
+    let list = app.list().await;
+    assert_eq!(list[0]["expires_ms"], Value::Null);
+    let (_, servers) = app.json(1, "GET", "/api/servers", None).await;
+    assert_eq!(servers[0]["active_tokens"], 1);
+
+    assert_eq!(app.initialize(token).await.status(), StatusCode::OK);
+    let id = created["row"]["id"].as_i64().unwrap();
+    let path = format!("/api/servers/pets/tokens/{id}/revoke");
+    let (status, _) = app.json(1, "POST", &path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        app.initialize(token).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn expired_token_is_refused(pool: PgPool) {
+    let app = App::new(pool.clone()).await;
+    let (_, created) = app.create_with(json!(7)).await;
+    let token = created["token"].as_str().unwrap();
+    assert_eq!(app.initialize(token).await.status(), StatusCode::OK);
+
+    sqlx::query("UPDATE mcp_tokens SET expires_at = now() - interval '1 second'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.initialize(token).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let (_, servers) = app.json(1, "GET", "/api/servers", None).await;
+    assert_eq!(servers[0]["active_tokens"], 0);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn access_jwt_without_expiry_is_refused(pool: PgPool) {
+    let app = App::new(pool).await;
+    let key = jsonwebtoken::EncodingKey::from_secret(common::JWT_SECRET.as_bytes());
+    let status = |claims: Value| {
+        let access = jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
+        let request = Request::get("/api/servers/pets/tokens")
+            .header(header::AUTHORIZATION, format!("Bearer {access}"))
+            .body(Body::empty())
+            .unwrap();
+        let router = app.router.clone();
+        async move { router.oneshot(request).await.unwrap().status() }
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = json!({ "sub": "1", "aud": "toolport-dashboard", "iat": now });
+    assert_eq!(status(claims.clone()).await, StatusCode::UNAUTHORIZED);
+
+    // The same claims with `exp` pass, so the 401 above comes from the missing `exp`.
+    let mut with_exp = claims;
+    with_exp["exp"] = json!(now + 60);
+    assert_eq!(status(with_exp).await, StatusCode::OK);
+}

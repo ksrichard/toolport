@@ -153,7 +153,8 @@ async fn list_servers(
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id) AS tools,
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id AND t.enabled) AS enabled_tools,
                 (SELECT count(*) FROM mcp_tokens k WHERE k.server_id = s.id
-                    AND k.revoked_at IS NULL AND k.expires_at > now()) AS active_tokens
+                    AND k.revoked_at IS NULL
+                    AND (k.expires_at IS NULL OR k.expires_at > now())) AS active_tokens
          FROM servers s WHERE s.user_id = $1 ORDER BY s.created_at, s.id",
     )
     .bind(auth.user_id)

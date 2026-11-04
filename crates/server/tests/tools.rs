@@ -413,10 +413,11 @@ impl Mcp {
 
     async fn connect(app: &App) -> Self {
         let ttl = std::time::Duration::from_secs(3600);
-        let token = mcp_tokens::create(&app.state.pool, &app.state.auth.jwt, "pets", "t", ttl)
-            .await
-            .unwrap()
-            .value;
+        let token =
+            mcp_tokens::create(&app.state.pool, &app.state.auth.jwt, "pets", "t", Some(ttl))
+                .await
+                .unwrap()
+                .value;
         let mut mcp = Self {
             router: app.router.clone(),
             token,

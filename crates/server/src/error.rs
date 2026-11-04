@@ -175,9 +175,9 @@ impl ApiError {
                 _ => StatusCode::UNPROCESSABLE_ENTITY,
             },
             Self::Token(error) => match error {
-                TokenError::EmptyName | TokenError::NameTooLong(_) => {
-                    StatusCode::UNPROCESSABLE_ENTITY
-                }
+                TokenError::EmptyName
+                | TokenError::NameTooLong(_)
+                | TokenError::InvalidLifetime(_) => StatusCode::UNPROCESSABLE_ENTITY,
                 TokenError::UnknownServer(_) => StatusCode::NOT_FOUND,
                 TokenError::Signing(_) | TokenError::Database(_) => {
                     StatusCode::INTERNAL_SERVER_ERROR
@@ -241,6 +241,7 @@ impl ApiError {
             },
             Self::Token(error) => match error {
                 TokenError::EmptyName | TokenError::NameTooLong(_) => "invalid_token_name",
+                TokenError::InvalidLifetime(_) => "invalid_token_lifetime",
                 TokenError::UnknownServer(_) => "not_found",
                 TokenError::Signing(_) | TokenError::Database(_) => "internal_error",
             },

@@ -7,8 +7,10 @@ use sqlx::PgPool;
 
 use crate::auth::{jwt::JwtKeys, refresh::random_hex};
 
-/// The default lifetime of a new token.
-pub const DEFAULT_TTL: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+/// The lifetime of a new token when the caller does not choose one.
+pub const DEFAULT_DAYS: i64 = 90;
+/// The longest lifetime with an end date. The other choice is "never".
+pub const MAX_DAYS: i64 = 365;
 
 pub const MAX_NAME_CHARS: usize = 64;
 
@@ -36,7 +38,8 @@ pub struct TokenInfo {
     pub name: String,
     /// The times are text in UTC, for example `2026-11-02 21:17`.
     pub created_at: String,
-    pub expires_at: String,
+    /// `None` for a token that never expires.
+    pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
     pub revoked: bool,
 }
@@ -49,6 +52,8 @@ pub enum TokenError {
     EmptyName,
     #[error("the token name must have at most {0} characters")]
     NameTooLong(usize),
+    #[error("the token lifetime must be 1 to {MAX_DAYS} days, or null for never")]
+    InvalidLifetime(i64),
     #[error("cannot sign the token")]
     Signing(#[from] jsonwebtoken::errors::Error),
     #[error("the database query failed")]
@@ -68,12 +73,22 @@ pub enum AuthorizeError {
     Database(#[from] sqlx::Error),
 }
 
+/// Converts a lifetime in days to a TTL. `None` means that the token never expires.
+pub fn lifetime(days: Option<i64>) -> Result<Option<Duration>, TokenError> {
+    match days {
+        None => Ok(None),
+        Some(days @ 1..=MAX_DAYS) => Ok(Some(Duration::from_secs(days.unsigned_abs() * 86_400))),
+        Some(days) => Err(TokenError::InvalidLifetime(days)),
+    }
+}
+
+/// A `ttl` of `None` makes a token that never expires.
 pub async fn create(
     pool: &PgPool,
     keys: &JwtKeys,
     server: &str,
     name: &str,
-    ttl: Duration,
+    ttl: Option<Duration>,
 ) -> Result<CreatedToken, TokenError> {
     let name = name.trim();
     if name.is_empty() {
@@ -97,7 +112,7 @@ pub async fn create(
     .bind(server_id)
     .bind(&jti)
     .bind(name)
-    .bind(issued.claims.exp as f64)
+    .bind(issued.claims.exp.map(|exp| exp as f64))
     .fetch_one(pool)
     .await?;
     Ok(CreatedToken {
@@ -145,7 +160,7 @@ pub async fn authorize(
         "SELECT t.id, t.name, t.last_used_at IS NULL OR t.last_used_at < now() - make_interval(secs => $4)
          FROM mcp_tokens t JOIN servers s ON s.id = t.server_id
          WHERE t.jti = $1 AND t.server_id = $2 AND s.name = $3
-           AND t.revoked_at IS NULL AND t.expires_at > now()",
+           AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())",
     )
     .bind(&claims.jti)
     .bind(claims.srv)

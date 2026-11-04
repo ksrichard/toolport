@@ -1860,3 +1860,55 @@ async fn reimport_leaves_a_detached_tool_alone(pool: PgPool) {
     assert_eq!(after, mine);
     assert_eq!(petstore_status_view(&app).await["source"], "spec");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn spec_api_can_change_base_url_and_auth_but_not_name(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let api_id = petstore_status_view(&app).await["api_id"].clone();
+    let path = format!("/api/servers/pets/apis/{api_id}");
+    let (_, apis) = app.json("GET", "/api/servers/pets/apis", json!(null)).await;
+    let name = apis[0]["name"].clone();
+
+    let body = json!({
+        "name": name, "base_url": "https://other.example/v3",
+        "auth": { "type": "bearer", "secret": SECRET },
+    });
+    let (status, saved) = app.json("PUT", &path, body).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["base_url"], "https://other.example/v3");
+    assert_eq!(
+        saved["auth"],
+        json!({ "type": "bearer", "secret_set": true })
+    );
+    assert!(!saved.to_string().contains(SECRET));
+
+    let body = json!({ "name": "renamed", "base_url": "https://other.example/v3", "auth": { "type": "none" } });
+    let (status, error) = app.json("PUT", &path, body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+    assert_eq!(error["error"], "spec_api_fixed");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn detached_tool_can_change_required_of_a_complex_input(pool: PgPool) {
+    let app = App::new(pool, true).await;
+    import_petstore(&app).await;
+    let view = detach(&app, "findPetsByStatus").await;
+    let mut body = save_body(&view);
+    let rows = body["draft"]["inputs"].as_array_mut().unwrap();
+    let row = rows.iter_mut().find(|r| r["name"] == "status").unwrap();
+    assert_eq!(row["input_type"], "complex");
+    let flipped = !row["required"].as_bool().unwrap();
+    row["required"] = json!(flipped);
+    let (status, saved) = app
+        .json("PUT", "/api/servers/pets/tools/findPetsByStatus", body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let required = saved["preview"]["inputSchema"]["required"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(required.contains(&json!("status")), flipped, "{saved}");
+    let listed = Mcp::connect(&app).await.listed("findPetsByStatus").await;
+    assert_eq!(listed["inputSchema"], saved["preview"]["inputSchema"]);
+}

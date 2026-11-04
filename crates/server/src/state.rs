@@ -30,6 +30,7 @@ pub struct AppState {
     pub peers: Arc<SessionPeers>,
     pub mcp_sessions: Arc<LocalSessionManager>,
     pub upstream_timeout: Duration,
+    pub rate_limit: Arc<RateLimiter>,
 }
 
 pub struct AuthSettings {
@@ -66,6 +67,7 @@ impl AppState {
         let live = Arc::new(LiveHub::default());
         let peers = Arc::new(SessionPeers::default());
         let upstream_timeout = Duration::from_millis(config.upstream_timeout_ms);
+        let rate_limit = Arc::new(RateLimiter::new(config.rate_limit_per_minute));
         let handler = ToolportMcp {
             pool: pool.clone(),
             http: upstream.clone(),
@@ -74,7 +76,7 @@ impl AppState {
             upstream_timeout,
             live: live.clone(),
             peers: peers.clone(),
-            rate_limit: Arc::new(RateLimiter::new(config.rate_limit_per_minute)),
+            rate_limit: rate_limit.clone(),
         };
         let mcp_sessions = Arc::new(LocalSessionManager::default());
         Ok(Self {
@@ -89,6 +91,7 @@ impl AppState {
             secrets,
             peers,
             upstream_timeout,
+            rate_limit,
         })
     }
 }

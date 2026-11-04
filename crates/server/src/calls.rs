@@ -1,14 +1,20 @@
 //! The call log and the metrics of the Live page.
 
+use std::time::Duration;
+
 use serde::Serialize;
 use sqlx::PgPool;
 use ts_rs::TS;
+
+use crate::error::error_chain;
 
 /// The metrics use the calls of this many last seconds.
 pub const METRICS_WINDOW_SECS: i64 = 60;
 /// The chart shows this many seconds, in buckets of `BUCKET_SECS`.
 pub const CHART_SECS: i64 = 300;
 pub const BUCKET_SECS: i64 = 5;
+/// Rows that one cleanup statement deletes. Small batches keep each lock short.
+pub const CLEANUP_BATCH: u32 = 5000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type, TS)]
 #[ts(export)]
@@ -158,4 +164,55 @@ pub async fn buckets(pool: &PgPool, server_id: i64) -> Result<Vec<Bucket>, sqlx:
     .bind(CHART_SECS as f64)
     .fetch_all(pool)
     .await
+}
+
+/// Deletes the calls that are older than `retention_days`, in batches of `batch` rows.
+/// `retention_days = 0` keeps all calls. Returns the number of deleted rows.
+pub async fn delete_old_calls(
+    pool: &PgPool,
+    retention_days: u32,
+    batch: u32,
+) -> Result<u64, sqlx::Error> {
+    if retention_days == 0 {
+        return Ok(0);
+    }
+    let days = i32::try_from(retention_days).unwrap_or(i32::MAX);
+    let mut deleted = 0;
+    loop {
+        let rows = sqlx::query(
+            "DELETE FROM calls WHERE id IN (
+                 SELECT id FROM calls WHERE created_at < now() - make_interval(days => $1)
+                 LIMIT $2
+             )",
+        )
+        .bind(days)
+        .bind(i64::from(batch))
+        .execute(pool)
+        .await?
+        .rows_affected();
+        deleted += rows;
+        if rows == 0 || rows < u64::from(batch) {
+            return Ok(deleted);
+        }
+    }
+}
+
+/// Runs `delete_old_calls` at each interval until the process stops.
+pub fn spawn_cleanup(pool: PgPool, retention_days: u32, interval: Duration) {
+    if retention_days == 0 {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        loop {
+            ticker.tick().await;
+            match delete_old_calls(&pool, retention_days, CLEANUP_BATCH).await {
+                Ok(0) => {}
+                Ok(deleted) => tracing::info!(deleted, retention_days, "old calls deleted"),
+                Err(error) => {
+                    tracing::error!(error = %error_chain(&error), "call cleanup failed");
+                }
+            }
+        }
+    });
 }

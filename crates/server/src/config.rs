@@ -36,6 +36,11 @@ pub struct Config {
     #[arg(long, env = "RATE_LIMIT_PER_MINUTE", default_value_t = 60)]
     pub rate_limit_per_minute: u32,
 
+    /// Days to keep the rows of the call log. An hourly job deletes older rows.
+    /// 0 keeps all rows. The upper bound keeps the cutoff date inside the Postgres range.
+    #[arg(long, env = "CALL_RETENTION_DAYS", default_value_t = 30, value_parser = clap::value_parser!(u32).range(0..=36_500))]
+    pub call_retention_days: u32,
+
     /// The URL that users open in the browser. GitHub sends users back to this URL after sign-in.
     #[arg(long, env = "PUBLIC_URL")]
     pub public_url: Url,

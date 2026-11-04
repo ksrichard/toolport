@@ -8,6 +8,7 @@ import { useListAnimation } from './motion'
 import type { NewToken } from './types/NewToken'
 import type { ServerSummary } from './types/ServerSummary'
 import type { TokenView } from './types/TokenView'
+import { PixelScenes } from './PixelScenes'
 
 // The same limit as `MAX_NAME_CHARS` in crates/server/src/mcp_tokens.rs.
 const MAX_NAME_CHARS = 64
@@ -79,6 +80,7 @@ export function Tokens({ server, onChanged }: TokensProps) {
           <h1>Tokens</h1>
           <div className="sub">An MCP client sends a token to connect. A revoked token stops working at once.</div>
         </div>
+        <PixelScenes />
         <div className="head-actions">
           {!creating && (
             <button

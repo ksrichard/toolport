@@ -116,6 +116,9 @@ Config:
   for local dev and tests.
 - `SPEC_CHECK_INTERVAL_SECS` (default 3600) is the time between two runs of the spec check.
   Each run checks the APIs whose daily check is on and whose last check is older than 24 hours.
+- `RATE_LIMIT_PER_MINUTE` (default 60) is the number of tool calls per minute for each MCP token.
+  0 turns the limit off.
+- `CALL_RETENTION_DAYS` (default 30) is the number of days to keep call rows. 0 keeps all rows.
 - `.env.example` lists every variable. CI checks that the Compose file is valid
   (`docker compose config`).
 
@@ -221,7 +224,13 @@ Each milestone ends with working code, tests, and a short demo.
     `with-tool` is reserved, because `POST /api/servers/with-tool` is a fixed route.
 12. Hardening. Encrypt upstream secrets at rest. Add rate limits per token. Delete old call
     rows after a set time.
-    Status: the encryption of upstream secrets is done. Rate limits and call-row cleanup are not.
+    Status: done. Upstream secrets are encrypted. Each MCP token has a token bucket for
+    `tools/call` (`crates/server/src/rate_limit.rs`): the burst is the calls of 10 s, and the
+    bucket refills at the limit per minute. A refused call gets a tool error "rate limit exceeded,
+    retry in N s". It does not reach the upstream API and is not saved in the call log. The
+    buckets live in memory, so each server process has its own limits. An hourly job
+    (`calls::delete_old_calls`) deletes old call rows in batches of 5000. After the cleanup, a
+    server with only old calls shows "never" as its last call on the All servers page.
 13. Deploy. Run the same `compose.yaml` on one host with a real `TOOLPORT_DOMAIN`.
     Add a Postgres backup job. Ask before any change to real infrastructure.
 

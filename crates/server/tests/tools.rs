@@ -1919,3 +1919,86 @@ async fn detached_tool_can_change_required_of_a_complex_input(pool: PgPool) {
     let listed = Mcp::connect(&app).await.listed("findPetsByStatus").await;
     assert_eq!(listed["inputSchema"], saved["preview"]["inputSchema"]);
 }
+
+/// The name of the enabled tool at this place in the id order of the server `pets`.
+async fn enabled_tool_at(app: &App, place: i64) -> String {
+    sqlx::query_scalar(
+        "SELECT t.name FROM tools t JOIN servers s ON s.id = t.server_id
+         WHERE s.name = 'pets' AND t.enabled ORDER BY t.id OFFSET $1 LIMIT 1",
+    )
+    .bind(place)
+    .fetch_one(&app.state.pool)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_route_refuses_a_paused_server(pool: PgPool) {
+    let app = App::new(pool.clone(), true).await;
+    sqlx::query("INSERT INTO servers (user_id, name) VALUES ($1, 'zoo')")
+        .bind(app.user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    common::set_plan(&pool, app.user, "free").await;
+    let api =
+        json!({ "kind": "draft", "base_url": fake_upstream().await, "auth": { "type": "none" } });
+
+    let (status, error) = app
+        .json(
+            "POST",
+            "/api/servers/zoo/tool-test",
+            test_body("latitude={lat}", api.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "plan_limit");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("this server is paused")
+    );
+
+    // A new, unsaved tool on the served server can still be tested.
+    let (status, result) = app
+        .json(
+            "POST",
+            "/api/servers/pets/tool-test",
+            test_body("latitude={lat}", api),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+}
+
+async fn test_stored_tool(app: &App, tool: &str) -> (StatusCode, Value) {
+    let path = format!("/api/servers/pets/tools/{tool}");
+    let (_, view) = app.json("GET", &path, json!(null)).await;
+    let body = json!({
+        "draft": view["draft"], "api": { "kind": "saved", "id": view["api_id"] },
+        "args": { "petId": 7 }, "spec_tool": tool,
+    });
+    app.json("POST", "/api/servers/pets/tool-test", body).await
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_route_refuses_a_paused_tool(pool: PgPool) {
+    let app = App::new(pool.clone(), true).await;
+    import_petstore_at(&app, &fake_petstore().await).await;
+    common::set_plan(&pool, app.user, "free").await;
+
+    let paused = enabled_tool_at(&app, 3).await;
+    let (status, error) = test_stored_tool(&app, &paused).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "plan_limit");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("the tool {paused} is paused"))
+    );
+
+    // A served tool passes the plan check. This one then needs its body argument.
+    let (_, error) = test_stored_tool(&app, &enabled_tool_at(&app, 0).await).await;
+    assert_eq!(error["error"], "invalid_test_call", "{error}");
+}

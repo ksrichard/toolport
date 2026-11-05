@@ -296,14 +296,20 @@ impl ApiError {
 
 fn limit_status(error: &LimitError) -> StatusCode {
     match error {
-        LimitError::Servers { .. } | LimitError::Tools { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+        LimitError::Servers { .. }
+        | LimitError::Tools { .. }
+        | LimitError::PausedServer(_)
+        | LimitError::PausedTool(_) => StatusCode::UNPROCESSABLE_ENTITY,
         LimitError::UnknownUser | LimitError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
 fn limit_code(error: &LimitError) -> &'static str {
     match error {
-        LimitError::Servers { .. } | LimitError::Tools { .. } => "plan_limit",
+        LimitError::Servers { .. }
+        | LimitError::Tools { .. }
+        | LimitError::PausedServer(_)
+        | LimitError::PausedTool(_) => "plan_limit",
         LimitError::UnknownUser | LimitError::Database(_) => "internal_error",
     }
 }

@@ -217,24 +217,24 @@ impl ToolportMcp {
             String,
             Option<String>,
             Option<Vec<u8>>,
-            bool,
+            i64,
         );
         let row: Option<Row> = sqlx::query_as(
-            "SELECT t.request, a.id, a.base_url, a.auth_type, a.auth_header, a.auth_secret,
-                    t.id IN (SELECT id FROM tools WHERE server_id = $1 AND enabled
-                             ORDER BY id LIMIT $3) AS served
+            "SELECT t.request, a.id, a.base_url, a.auth_type, a.auth_header, a.auth_secret, t.id
              FROM tools t JOIN apis a ON a.id = t.api_id
              WHERE t.server_id = $1 AND t.name = $2 AND t.enabled",
         )
         .bind(caller.server_id)
         .bind(tool)
-        .bind(account.plan.max_tools_per_server.map(i64::from))
         .fetch_optional(&self.pool)
         .await
         .map_err(CallError::Database)?;
-        let (Json(template), id, base_url, auth_type, auth_header, auth_secret, served) =
+        let (Json(template), id, base_url, auth_type, auth_header, auth_secret, tool_id) =
             row.ok_or_else(|| CallError::UnknownTool(tool.to_owned()))?;
-        if !served {
+        let paused = plan::tool_is_paused(&self.pool, caller.server_id, tool_id, &account.plan)
+            .await
+            .map_err(CallError::Database)?;
+        if paused {
             let text = plan::paused_tool_message(&account.plan, tool);
             return Ok(CallToolResult::error(vec![ContentBlock::text(text)]));
         }

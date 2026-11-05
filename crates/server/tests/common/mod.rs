@@ -121,3 +121,17 @@ pub async fn create_user(pool: &PgPool, github_id: i64, login: &str) -> i64 {
         .await
         .unwrap()
 }
+
+/// Moves a user to the plan with this code, as the Stripe webhook does.
+/// Tests that need several servers or many tools use `pro`.
+pub async fn set_plan(pool: &PgPool, user_id: i64, code: &str) {
+    let updated = sqlx::query(
+        "UPDATE users SET plan_id = (SELECT id FROM plans WHERE code = $2) WHERE id = $1",
+    )
+    .bind(user_id)
+    .bind(code)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(updated.rows_affected(), 1);
+}

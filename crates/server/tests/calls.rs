@@ -8,29 +8,45 @@ use serde_json::Value;
 use server::{calls, state::AppState};
 use sqlx::PgPool;
 
-/// Makes a server with `old` calls of 31 days ago and `new` calls of now.
+/// Makes a server of a Pro user with `old` calls of 31 days ago and `new` calls of now.
 async fn server_with_calls(pool: &PgPool, old: i32, new: i32) -> i64 {
     let user = common::create_user(pool, 1, "octocat").await;
-    let server: i64 =
-        sqlx::query_scalar("INSERT INTO servers (user_id, name) VALUES ($1, 'pets') RETURNING id")
-            .bind(user)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    for (count, age) in [(old, "31 days"), (new, "0 days")] {
-        sqlx::query(
-            "INSERT INTO calls (server_id, tool, result, latency_ms, created_at)
-             SELECT $1, 'tool_' || n, 'ok', 10, now() - $3::interval
-             FROM generate_series(1, $2) AS n",
-        )
-        .bind(server)
-        .bind(count)
-        .bind(age)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
+    common::set_plan(pool, user, "pro").await;
+    let server = create_server(pool, user, "pets").await;
+    add_calls(pool, server, old, "31 days").await;
+    add_calls(pool, server, new, "0 days").await;
     server
+}
+
+async fn create_server(pool: &PgPool, user: i64, name: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO servers (user_id, name) VALUES ($1, $2) RETURNING id")
+        .bind(user)
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn add_calls(pool: &PgPool, server: i64, count: i32, age: &str) {
+    sqlx::query(
+        "INSERT INTO calls (server_id, tool, result, latency_ms, created_at)
+         SELECT $1, 'tool_' || n, 'ok', 10, now() - $3::interval
+         FROM generate_series(1, $2) AS n",
+    )
+    .bind(server)
+    .bind(count)
+    .bind(age)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn server_count(pool: &PgPool, server: i64) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM calls WHERE server_id = $1")
+        .bind(server)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 async fn count(pool: &PgPool) -> i64 {
@@ -43,7 +59,7 @@ async fn count(pool: &PgPool) -> i64 {
 #[sqlx::test(migrations = "../../migrations")]
 async fn old_calls_are_deleted_and_new_calls_stay(pool: PgPool) {
     let server = server_with_calls(&pool, 3, 2).await;
-    let deleted = calls::delete_old_calls(&pool, 30, calls::CLEANUP_BATCH)
+    let deleted = calls::delete_old_calls(&pool, calls::CLEANUP_BATCH)
         .await
         .unwrap();
     assert_eq!(deleted, 3);
@@ -63,29 +79,58 @@ async fn old_calls_are_deleted_and_new_calls_stay(pool: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn cleanup_deletes_in_many_batches(pool: PgPool) {
     server_with_calls(&pool, 7, 1).await;
-    let deleted = calls::delete_old_calls(&pool, 30, 2).await.unwrap();
+    let deleted = calls::delete_old_calls(&pool, 2).await.unwrap();
     assert_eq!(deleted, 7);
     assert_eq!(count(&pool).await, 1);
 }
 
+/// Free keeps 24 hours of calls and Pro keeps 30 days.
 #[sqlx::test(migrations = "../../migrations")]
-async fn calls_inside_the_retention_stay(pool: PgPool) {
-    server_with_calls(&pool, 3, 2).await;
-    let deleted = calls::delete_old_calls(&pool, 60, calls::CLEANUP_BATCH)
+async fn cleanup_keeps_the_history_of_each_plan(pool: PgPool) {
+    let free_user = common::create_user(&pool, 1, "free").await;
+    let pro_user = common::create_user(&pool, 2, "pro").await;
+    common::set_plan(&pool, pro_user, "pro").await;
+    let free = create_server(&pool, free_user, "free-srv").await;
+    let pro = create_server(&pool, pro_user, "pro-srv").await;
+    for server in [free, pro] {
+        add_calls(&pool, server, 1, "23 hours").await;
+        add_calls(&pool, server, 2, "25 hours").await;
+        add_calls(&pool, server, 3, "29 days").await;
+        add_calls(&pool, server, 4, "31 days").await;
+    }
+
+    let deleted = calls::delete_old_calls(&pool, calls::CLEANUP_BATCH)
         .await
         .unwrap();
-    assert_eq!(deleted, 0);
-    assert_eq!(count(&pool).await, 5);
+    assert_eq!(deleted, 2 + 3 + 4 + 4);
+    assert_eq!(server_count(&pool, free).await, 1);
+    assert_eq!(server_count(&pool, pro).await, 1 + 2 + 3);
 }
 
+/// The cleanup reads the history from the plans table, so a change applies at the next run.
 #[sqlx::test(migrations = "../../migrations")]
-async fn zero_retention_keeps_all_calls(pool: PgPool) {
-    server_with_calls(&pool, 3, 2).await;
-    let deleted = calls::delete_old_calls(&pool, 0, calls::CLEANUP_BATCH)
+async fn cleanup_uses_the_history_in_the_plans_table(pool: PgPool) {
+    let server = server_with_calls(&pool, 0, 0).await;
+    add_calls(&pool, server, 2, "3 days").await;
+    add_calls(&pool, server, 1, "1 hour").await;
+    assert_eq!(
+        calls::delete_old_calls(&pool, calls::CLEANUP_BATCH)
+            .await
+            .unwrap(),
+        0
+    );
+
+    sqlx::query("UPDATE plans SET history_hours = 48 WHERE code = 'pro'")
+        .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(deleted, 0);
-    assert_eq!(count(&pool).await, 5);
+    assert_eq!(
+        calls::delete_old_calls(&pool, calls::CLEANUP_BATCH)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(count(&pool).await, 1);
 }
 
 async fn get_json(state: &AppState, user_id: i64, path: &str) -> (StatusCode, Value) {

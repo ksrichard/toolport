@@ -18,6 +18,7 @@ use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
     import::{ImportReport, ImportRequest, Owner, import_spec},
+    plan,
     state::AppState,
     templates::{self, TEMPLATES, Template},
 };
@@ -50,6 +51,11 @@ pub struct ServerSummary {
     #[sqlx(skip)]
     #[ts(type = "number")]
     pub connected_clients: i64,
+    /// True when the server is over the plan limit. It does not serve MCP requests then.
+    pub paused: bool,
+    /// Enabled tools that the plan does not serve.
+    #[ts(type = "number")]
+    pub paused_tools: i64,
 }
 
 #[derive(Debug, Serialize, TS, sqlx::FromRow)]
@@ -65,6 +71,8 @@ pub struct ToolSummary {
     pub source: String,
     pub edited: bool,
     pub spec_changed: bool,
+    /// True when the tool is on, but over the plan limit, so MCP clients do not get it.
+    pub paused: bool,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -109,6 +117,8 @@ pub struct ImportedApi {
     pub tools: Vec<String>,
     /// Spec tools that this import created.
     pub added: Vec<String>,
+    /// New tools that start off, because the plan allows no more enabled tools.
+    pub disabled: Vec<String>,
     /// Unedited spec tools that the new spec changed.
     pub changed: Vec<String>,
     /// Edited tools that stayed.
@@ -176,6 +186,9 @@ async fn summaries(
 ) -> Result<Vec<ServerSummary>, ApiError> {
     let mut servers: Vec<ServerSummary> = sqlx::query_as(
         "SELECT s.id, s.name,
+                (p.max_servers IS NOT NULL AND s.rank > p.max_servers) AS paused,
+                (SELECT greatest(count(*) - coalesce(p.max_tools_per_server, count(*)), 0)
+                    FROM tools t WHERE t.server_id = s.id AND t.enabled) AS paused_tools,
                 (SELECT count(*) FROM apis a WHERE a.server_id = s.id) AS apis,
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id) AS tools,
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id AND t.enabled) AS enabled_tools,
@@ -183,7 +196,10 @@ async fn summaries(
                     AND (k.expires_at IS NULL OR k.expires_at > now())) AS active_tokens,
                 (SELECT (extract(epoch FROM max(c.created_at)) * 1000)::bigint
                     FROM calls c WHERE c.server_id = s.id) AS last_call_ms
-         FROM servers s WHERE s.user_id = $1 AND ($2::bigint IS NULL OR s.id = $2)
+         FROM (SELECT *, row_number() OVER (ORDER BY created_at, id) AS rank
+               FROM servers WHERE user_id = $1) s
+         JOIN users u ON u.id = s.user_id JOIN plans p ON p.id = u.plan_id
+         WHERE $2::bigint IS NULL OR s.id = $2
          ORDER BY s.created_at, s.id",
     )
     .bind(user_id)
@@ -208,12 +224,15 @@ async fn create_server(
     if !is_valid_server_name(name) {
         return Err(ApiError::InvalidServerName);
     }
+    let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    plan::check_server_limit(&mut tx, auth.user_id, 1).await?;
     let id = sqlx::query_scalar("INSERT INTO servers (user_id, name) VALUES ($1, $2) RETURNING id")
         .bind(auth.user_id)
         .bind(name)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|error| name_error(error, name))?;
+    tx.commit().await.map_err(ApiError::Database)?;
     let summary = ServerSummary {
         id,
         name: name.to_owned(),
@@ -224,6 +243,8 @@ async fn create_server(
         active_tokens: 0,
         last_call_ms: None,
         connected_clients: 0,
+        paused: false,
+        paused_tools: 0,
     };
     Ok((StatusCode::CREATED, Json(summary)))
 }
@@ -287,6 +308,9 @@ async fn delete_server(
             .ok_or(ApiError::NotFound)?;
     state.peers.close_server(id, &state.mcp_sessions).await;
     state.live.forget_server(id);
+    plan::plan_changed(&state, auth.user_id)
+        .await
+        .map_err(ApiError::Database)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -301,8 +325,14 @@ async fn list_tools(
                 t.request->>'path' AS path, a.name AS api, t.enabled,
                 t.source, t.edited,
                 (t.edited AND t.edited_hash IS NOT NULL AND t.spec_hash <> t.edited_hash)
-                    AS spec_changed
+                    AS spec_changed,
+                (t.enabled AND p.max_tools_per_server IS NOT NULL
+                    AND (SELECT count(*) FROM tools e
+                         WHERE e.server_id = t.server_id AND e.enabled AND e.id < t.id)
+                        >= p.max_tools_per_server) AS paused
          FROM tools t JOIN apis a ON a.id = t.api_id
+         JOIN servers s ON s.id = t.server_id JOIN users u ON u.id = s.user_id
+         JOIN plans p ON p.id = u.plan_id
          WHERE t.server_id = $1 ORDER BY t.id",
     )
     .bind(server_id)
@@ -369,6 +399,7 @@ impl From<ImportReport> for ImportedApi {
             replaced: report.replaced,
             tools: report.tools,
             added: report.added,
+            disabled: report.disabled,
             changed: report.changed,
             kept: report.kept,
             removed: report.removed,

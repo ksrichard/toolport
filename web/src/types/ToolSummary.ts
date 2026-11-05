@@ -4,4 +4,8 @@ export type ToolSummary = { name: string, description: string, method: string, p
 /**
  * `spec` or `manual`.
  */
-source: string, edited: boolean, spec_changed: boolean, };
+source: string, edited: boolean, spec_changed: boolean, 
+/**
+ * True when the tool is on, but over the plan limit, so MCP clients do not get it.
+ */
+paused: boolean, };

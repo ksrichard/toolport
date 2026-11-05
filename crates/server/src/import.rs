@@ -1,5 +1,6 @@
 //! Loads an OpenAPI spec into a server. The dashboard and the `import-spec` binary use it.
 
+use crate::plan::{self, LimitError};
 use reqwest::Url;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, types::Json};
@@ -36,6 +37,8 @@ pub struct ImportReport {
     pub tools: Vec<String>,
     /// Spec tools that this import created.
     pub added: Vec<String>,
+    /// New tools that start off, because the plan allows no more enabled tools.
+    pub disabled: Vec<String>,
     /// Unedited spec tools that the new spec changed.
     pub changed: Vec<String>,
     /// Edited tools that stayed. The import changed only their stored spec version.
@@ -65,6 +68,8 @@ pub enum ImportError {
     ServerOwnedByOther(String),
     #[error("other APIs of this server already have tools with these names: {}", .0.join(", "))]
     ToolNameTaken(Vec<String>),
+    #[error("{0}")]
+    Plan(#[from] LimitError),
     #[error("the tool could not be hashed")]
     Hash(#[from] serde_json::Error),
     #[error("the database query failed")]
@@ -146,6 +151,11 @@ pub async fn import_spec(
     if server_owner != owner_id {
         return Err(ImportError::ServerOwnedByOther(request.server.to_owned()));
     }
+    if server_created {
+        plan::check_server_limit(&mut tx, owner_id, 0).await?;
+    }
+    // New tools over the plan limit start off. The tools that are on now stay on.
+    let mut room = plan::tool_room(&mut tx, server_id).await?;
 
     let existing: Option<i64> =
         sqlx::query_scalar("SELECT id FROM apis WHERE server_id = $1 AND name = $2 FOR UPDATE")
@@ -208,6 +218,7 @@ pub async fn import_spec(
     let mut tools = Vec::with_capacity(conversion.tools.len());
     let mut kept = Vec::new();
     let mut added = Vec::new();
+    let mut disabled = Vec::new();
     let mut changed = Vec::new();
     let mut taken = Vec::new();
     for (tool, operation) in conversion.tools.iter().zip(&operations) {
@@ -230,10 +241,11 @@ pub async fn import_spec(
         }
         match old {
             None => {
+                let enabled = room.take();
                 sqlx::query(
                     "INSERT INTO tools (api_id, server_id, name, description, input_schema,
-                                        request, source, spec_tool, spec_hash, operation)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'spec', $7, $8, $9)",
+                                        request, source, spec_tool, spec_hash, operation, enabled)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'spec', $7, $8, $9, $10)",
                 )
                 .bind(api_id)
                 .bind(server_id)
@@ -244,8 +256,12 @@ pub async fn import_spec(
                 .bind(Json(tool))
                 .bind(&hash)
                 .bind(operation)
+                .bind(enabled)
                 .execute(&mut *tx)
                 .await?;
+                if !enabled {
+                    disabled.push(tool.name.clone());
+                }
                 added.push(tool.name.clone());
                 tools.push(tool.name.clone());
             }
@@ -296,6 +312,7 @@ pub async fn import_spec(
         replaced,
         tools,
         added,
+        disabled,
         changed,
         kept,
         removed,

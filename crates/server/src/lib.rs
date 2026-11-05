@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod billing;
 pub mod calls;
 pub mod config;
 pub mod error;
@@ -6,6 +7,7 @@ pub mod import;
 pub mod live;
 pub mod mcp;
 pub mod mcp_tokens;
+pub mod plan;
 pub mod rate_limit;
 pub mod secrets;
 pub mod servers;
@@ -34,6 +36,7 @@ pub fn app(state: AppState) -> Router {
         .merge(tokens::routes())
         .merge(spec_check::routes())
         .merge(rate_limit::routes())
+        .merge(billing::routes())
         .fallback(|| async { ApiError::NotFound });
     Router::new()
         .nest("/api", api)

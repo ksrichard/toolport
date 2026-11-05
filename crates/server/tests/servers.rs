@@ -29,8 +29,10 @@ struct App {
 }
 
 impl App {
+    /// The user is on Pro, because the tests use several servers and more tools than Free allows.
     async fn new(pool: PgPool) -> Self {
-        common::create_user(&pool, 1, "octocat").await;
+        let user = common::create_user(&pool, 1, "octocat").await;
+        common::set_plan(&pool, user, "pro").await;
         let state = common::state(pool).await;
         Self {
             router: server::app(state.clone()),

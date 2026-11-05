@@ -30,6 +30,7 @@ use crate::{
     error::{ApiError, error_chain},
     live::{CallEvent, FirstRequest, LiveHub},
     mcp_tokens::{self, AuthorizeError, McpCaller},
+    plan::{self, AccountPlan, Plan},
     rate_limit::RateLimiter,
     secrets::{SecretsError, SecretsKey},
     sessions::SessionPeers,
@@ -120,6 +121,10 @@ pub enum CallError {
     AuthSetup,
     #[error("the database query failed")]
     Database(#[source] sqlx::Error),
+    #[error("the owner of the server does not exist")]
+    UnknownOwner,
+    #[error("{0}")]
+    Paused(String),
 }
 
 impl From<CallError> for McpError {
@@ -129,7 +134,13 @@ impl From<CallError> for McpError {
                 tracing::debug!(error = %error_chain(&error), "MCP tool call rejected");
                 McpError::invalid_params(error.to_string(), None)
             }
+            // A JSON-RPC error, so `tools/list` fails too and the client shows the reason.
+            CallError::Paused(message) => McpError::invalid_request(
+                message,
+                Some(serde_json::json!({ "reason": "server_paused" })),
+            ),
             CallError::MissingCaller
+            | CallError::UnknownOwner
             | CallError::BaseUrl(_)
             | CallError::Blocked(_)
             | CallError::Secret(_)
@@ -156,12 +167,32 @@ impl ToolportMcp {
         }
     }
 
-    async fn tools(&self, caller: &McpCaller) -> Result<Vec<Tool>, CallError> {
+    /// Loads the plan of the owner and refuses a server over the plan limit.
+    async fn served_plan(&self, caller: &McpCaller) -> Result<AccountPlan, CallError> {
+        let account = plan::account_plan(&self.pool, caller.owner_id)
+            .await
+            .map_err(CallError::Database)?
+            .ok_or(CallError::UnknownOwner)?;
+        let served = plan::server_is_served(&self.pool, caller.server_id, &account.plan)
+            .await
+            .map_err(CallError::Database)?;
+        if !served {
+            tracing::info!(server = %caller.server_name, "MCP request to a paused server");
+            return Err(CallError::Paused(plan::paused_server_message(
+                &account.plan,
+            )));
+        }
+        Ok(account)
+    }
+
+    /// Only the first enabled tools by id, up to the plan limit. `LIMIT NULL` means no limit.
+    async fn tools(&self, caller: &McpCaller, plan: &Plan) -> Result<Vec<Tool>, CallError> {
         let rows: Vec<(String, String, Json<JsonObject>)> = sqlx::query_as(
             "SELECT name, description, input_schema FROM tools
-             WHERE server_id = $1 AND enabled ORDER BY id",
+             WHERE server_id = $1 AND enabled ORDER BY id LIMIT $2",
         )
         .bind(caller.server_id)
+        .bind(plan.max_tools_per_server.map(i64::from))
         .fetch_all(&self.pool)
         .await
         .map_err(CallError::Database)?;
@@ -174,6 +205,7 @@ impl ToolportMcp {
     async fn call(
         &self,
         caller: &McpCaller,
+        account: &AccountPlan,
         client_name: Option<&str>,
         tool: &str,
         args: &JsonObject,
@@ -185,19 +217,27 @@ impl ToolportMcp {
             String,
             Option<String>,
             Option<Vec<u8>>,
+            bool,
         );
         let row: Option<Row> = sqlx::query_as(
-            "SELECT t.request, a.id, a.base_url, a.auth_type, a.auth_header, a.auth_secret
+            "SELECT t.request, a.id, a.base_url, a.auth_type, a.auth_header, a.auth_secret,
+                    t.id IN (SELECT id FROM tools WHERE server_id = $1 AND enabled
+                             ORDER BY id LIMIT $3) AS served
              FROM tools t JOIN apis a ON a.id = t.api_id
              WHERE t.server_id = $1 AND t.name = $2 AND t.enabled",
         )
         .bind(caller.server_id)
         .bind(tool)
+        .bind(account.plan.max_tools_per_server.map(i64::from))
         .fetch_optional(&self.pool)
         .await
         .map_err(CallError::Database)?;
-        let (Json(template), id, base_url, auth_type, auth_header, auth_secret) =
+        let (Json(template), id, base_url, auth_type, auth_header, auth_secret, served) =
             row.ok_or_else(|| CallError::UnknownTool(tool.to_owned()))?;
+        if !served {
+            let text = plan::paused_tool_message(&account.plan, tool);
+            return Ok(CallToolResult::error(vec![ContentBlock::text(text)]));
+        }
         let auth = UpstreamAuth::from_columns(&auth_type, auth_header, auth_secret)
             .ok_or(CallError::AuthSetup)?;
         let api = ApiTarget { id, base_url, auth };
@@ -208,11 +248,36 @@ impl ToolportMcp {
             allow_loopback: self.allow_local_upstream,
         };
 
+        // The quota counts only calls that reach the upstream API, so a call that fails
+        // before the request gives its place back.
+        let reserved = plan::reserve_call(&self.pool, caller.owner_id, account)
+            .await
+            .map_err(CallError::Database)?;
+        if !reserved {
+            tracing::info!(
+                server = %caller.server_name,
+                user_id = caller.owner_id,
+                tool,
+                "MCP tool call over the monthly quota",
+            );
+            let text = plan::quota_message(account);
+            return Ok(CallToolResult::error(vec![ContentBlock::text(text)]));
+        }
+        let output = upstream::call_upstream(&ctx, &api, DraftSecret::Saved, &template, args).await;
         let CallOutput {
             result,
             outcome,
             trace,
-        } = upstream::call_upstream(&ctx, &api, DraftSecret::Saved, &template, args).await?;
+        } = match output {
+            Ok(output) => output,
+            Err(error) => {
+                if let Err(release) = plan::release_call(&self.pool, caller.owner_id, account).await
+                {
+                    tracing::error!(error = %error_chain(&release), "cannot give back a quota call");
+                }
+                return Err(error);
+            }
+        };
         let latency_ms = u32::try_from(trace.latency_ms).unwrap_or(u32::MAX);
         // The log has no arguments and no response text, because they can hold secrets.
         tracing::info!(
@@ -292,7 +357,8 @@ impl ServerHandler for ToolportMcp {
         self.register_peer(&caller, &context.extensions, &context.peer);
         let client = client_name(&context);
         let is_new = self.live.seen(&caller, client.as_deref());
-        let tools = self.tools(&caller).await?;
+        let account = self.served_plan(&caller).await?;
+        let tools = self.tools(&caller, &account.plan).await?;
         if is_new {
             let count = u32::try_from(tools.len()).ok();
             self.announce(&caller, client, "tools/list", count);
@@ -325,9 +391,10 @@ impl ServerHandler for ToolportMcp {
             );
             return Ok(CallToolResult::error(vec![ContentBlock::text(limited.to_string())]).into());
         }
+        let account = self.served_plan(&caller).await?;
         let args = request.arguments.unwrap_or_default();
         let result = self
-            .call(&caller, client.as_deref(), &request.name, &args)
+            .call(&caller, &account, client.as_deref(), &request.name, &args)
             .await?;
         Ok(result.into())
     }

@@ -12,4 +12,12 @@ last_call_ms: number | null,
 /**
  * Clients with an MCP request in the last 2 minutes. The count is in memory only.
  */
-connected_clients: number, };
+connected_clients: number, 
+/**
+ * True when the server is over the plan limit. It does not serve MCP requests then.
+ */
+paused: boolean, 
+/**
+ * Enabled tools that the plan does not serve.
+ */
+paused_tools: number, };

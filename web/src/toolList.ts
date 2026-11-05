@@ -21,6 +21,9 @@ export function useToolList(server: string, onChanged?: () => void): ToolList {
   const [switchError, setSwitchError] = useState<string | null>(null)
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
 
+  // A switch change can pause or unpause other tools under the plan limit, so the list
+  // loads again after each accepted change.
+  const [version, setVersion] = useState(0)
   useEffect(() => {
     let cancelled = false
     getTools(server).then(
@@ -30,7 +33,7 @@ export function useToolList(server: string, onChanged?: () => void): ToolList {
     return () => {
       cancelled = true
     }
-  }, [server])
+  }, [server, version])
 
   const update = (tool: string, enabled: boolean) =>
     setTools((list) => list?.map((t) => (t.name === tool ? { ...t, enabled } : t)) ?? null)
@@ -50,6 +53,7 @@ export function useToolList(server: string, onChanged?: () => void): ToolList {
     setToolEnabled(server, tool, enabled).then(
       () => {
         setPendingFor(tool, false)
+        setVersion((v) => v + 1)
         onChanged?.()
       },
       (e: Error) => {

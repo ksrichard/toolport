@@ -3,6 +3,7 @@
 
 import type { ApiView } from './types/ApiView'
 import type { Billing } from './types/Billing'
+import type { BillingRedirect } from './types/BillingRedirect'
 import type { CallPage } from './types/CallPage'
 import type { CallSeries } from './types/CallSeries'
 import type { CreateServerWithTool } from './types/CreateServerWithTool'
@@ -202,7 +203,7 @@ export const createServerWithTool = (body: CreateServerWithTool) =>
 export const getBilling = () => api<Billing>('/api/billing')
 
 /** Starts Stripe Checkout for a paid plan. The app then opens the returned URL. */
-export const startCheckout = (plan: string) => api<{ url: string }>('/api/billing/checkout', json('POST', { plan }))
+export const startCheckout = (plan: string) => api<BillingRedirect>('/api/billing/checkout', json('POST', { plan }))
 
 /** Opens the Stripe Customer Portal, where the user cancels, changes the card, and sees invoices. */
-export const openBillingPortal = () => api<{ url: string }>('/api/billing/portal', { method: 'POST' })
+export const openBillingPortal = () => api<BillingRedirect>('/api/billing/portal', { method: 'POST' })

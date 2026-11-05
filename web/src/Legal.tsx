@@ -60,8 +60,9 @@ function Terms() {
 
       <h2>Plans and payment</h2>
       <p>
-        The Free plan costs nothing. The Pro plan is not available yet, and we take no payments. We will update these
-        terms before we take payments.
+        The Free plan costs nothing. The Pro plan is a monthly subscription. Stripe handles the payment. Your
+        subscription renews each month until you cancel it. You cancel it, change your card, and see your invoices in
+        the Stripe customer portal. After a cancel, the Pro plan stays until the end of the paid period.
       </p>
 
       <h2>No guarantee</h2>
@@ -124,6 +125,14 @@ function Privacy() {
         to the upstream API that you added. That client and that API have their own privacy rules.
       </p>
 
+      <h2>Payments</h2>
+      <p>
+        Stripe handles the payments for the Pro plan. You enter your card on a Stripe page, not in ToolPort. ToolPort
+        stores only your Stripe customer id, your Stripe subscription id, and the plan state: the plan, the
+        subscription status, the current period, and whether the subscription ends at the period end. ToolPort does
+        not store or see your card data. Stripe has its own privacy rules.
+      </p>
+
       <h2>Cookies and browser storage</h2>
       <p>
         ToolPort sets a refresh cookie when you sign in. It is HttpOnly, it lives 30 days, and the browser sends it only
@@ -137,14 +146,14 @@ function Privacy() {
 
       <h2>Other services</h2>
       <p>
-        GitHub handles the sign-in. The upstream APIs that you add get the requests for your tools. The pages load
+        GitHub handles the sign-in. Stripe handles the payments. The upstream APIs that you add get the requests for your tools. The pages load
         their fonts from an external font service, which sees your IP address.
       </p>
 
       <h2>How long we keep data</h2>
       <p>
-        ToolPort keeps your data until it is deleted. ToolPort does not delete old call log rows automatically yet. To
-        delete your account and its data, ask the operator.
+        ToolPort keeps your data until it is deleted. It deletes call log rows after the history time of your plan: 24
+        hours on Free and 30 days on Pro. To delete your account and its data, ask the operator.
       </p>
 
       <h2>Changes</h2>

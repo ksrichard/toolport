@@ -2,6 +2,7 @@
 // that JavaScript cannot read. The browser sends it only to /auth/*.
 
 import type { ApiView } from './types/ApiView'
+import type { Billing } from './types/Billing'
 import type { CallPage } from './types/CallPage'
 import type { CallSeries } from './types/CallSeries'
 import type { CreateServerWithTool } from './types/CreateServerWithTool'
@@ -197,3 +198,11 @@ export const testDraftTool = (body: TestRequest) => api<TestResult>('/api/tool-t
 
 export const createServerWithTool = (body: CreateServerWithTool) =>
   api<ServerSummary>('/api/servers/with-tool', json('POST', body))
+
+export const getBilling = () => api<Billing>('/api/billing')
+
+/** Starts Stripe Checkout for a paid plan. The app then opens the returned URL. */
+export const startCheckout = (plan: string) => api<{ url: string }>('/api/billing/checkout', json('POST', { plan }))
+
+/** Opens the Stripe Customer Portal, where the user cancels, changes the card, and sees invoices. */
+export const openBillingPortal = () => api<{ url: string }>('/api/billing/portal', { method: 'POST' })

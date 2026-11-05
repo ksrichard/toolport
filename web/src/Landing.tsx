@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Brand } from './Brand'
-import { PLANS, type Plan } from './plans'
+import { PlanTable } from './PlanTable'
+import { usePlans, type Plan } from './plans'
 
 const SIGN_IN = '/auth/github/login'
 
@@ -31,14 +32,11 @@ const STEPS = [
   { title: 'Watch', text: 'See each tool call, its status, and its latency on the live dashboard.' },
 ]
 
-const count = new Intl.NumberFormat('en-US')
-
-function limit(value: number | null, unit: string): string {
-  return value === null ? `Unlimited ${unit}` : `${count.format(value)} ${unit}`
-}
+const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five']
 
 export function Landing() {
   const [error] = useState(takeLoginError)
+  const { plans, error: plansError } = usePlans()
 
   return (
     <div className="site">
@@ -82,17 +80,16 @@ export function Landing() {
         </section>
 
         <section aria-labelledby="pricing-title">
+          <p className="eyebrow">// Plans</p>
           <h2 id="pricing-title" className="site-title">
-            Pricing
+            {plans ? `${NUMBER_WORDS[plans.length] ?? plans.length} plans` : 'Plans'}, enforced in Rust
           </h2>
-          <div className="plans">
-            {PLANS.map((plan) => (
-              <PlanCard key={plan.id} plan={plan} />
-            ))}
-          </div>
-          <p className="note">
-            These plans are a preview. ToolPort does not apply the limits yet, and it takes no payments yet.
-          </p>
+          {plansError && (
+            <p className="alert" role="alert">
+              {plansError}
+            </p>
+          )}
+          {plans && <PlanTable plans={plans} action={planAction} />}
         </section>
       </main>
 
@@ -101,29 +98,11 @@ export function Landing() {
   )
 }
 
-function PlanCard({ plan }: { plan: Plan }) {
-  const paid = plan.priceEur > 0
+function planAction(plan: Plan) {
   return (
-    <article className={`panel plan${paid ? ' featured' : ''}`}>
-      <h3>{plan.name}</h3>
-      <p className="price">
-        €{plan.priceEur} <small>per month</small>
-      </p>
-      <ul>
-        <li>{limit(plan.servers, plan.servers === 1 ? 'server' : 'servers')}</li>
-        <li>{limit(plan.tools, 'tools')}</li>
-        <li>{limit(plan.callsPerMonth, 'calls per month')}</li>
-      </ul>
-      {paid ? (
-        <button className="btn big" type="button" disabled>
-          Coming soon
-        </button>
-      ) : (
-        <a className="btn primary big" href={SIGN_IN}>
-          Start free
-        </a>
-      )}
-    </article>
+    <a className={`btn${plan.is_default ? ' primary' : ''}`} href={SIGN_IN}>
+      {plan.is_default ? 'Start free' : `Sign in to get ${plan.name}`}
+    </a>
   )
 }
 

@@ -1,9 +1,11 @@
 // App shell: side menu with the theme picker, header, and a small router for the pages.
 
 import { useCallback, useEffect, useState } from 'react'
-import { getServers, setTheme, signOut, type Theme, type User } from './api'
+import { getBilling, getServers, setTheme, signOut, type Theme, type User } from './api'
 import { Brand } from './Brand'
 import { Apis } from './Apis'
+import { Billing } from './Billing'
+import { dayText, PlanContext, plural, quotaTone, type Billing as BillingData, type PlanState } from './plans'
 import { Builder } from './Builder'
 import { Live } from './Live'
 import { Onboarding } from './Onboarding'
@@ -18,7 +20,11 @@ const PAGES: { path: string; label: string }[] = [
   { path: '/tools', label: 'Tools' },
   { path: '/tokens', label: 'Tokens' },
   { path: '/servers', label: 'All servers' },
+  { path: '/billing', label: 'Plan & billing' },
 ]
+
+// MCP calls change the usage without an action in the dashboard, so the shell asks again from time to time.
+const BILLING_REFRESH_MS = 60_000
 
 const THEMES: { id: Theme; label: string }[] = [
   { id: 'neon', label: 'Neon' },
@@ -92,6 +98,19 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedName, setSelectedName] = useState<string | null>(loadSelected)
 
+  const [billing, setBilling] = useState<BillingData | null>(null)
+
+  // A failed plan load keeps the last value. The pages then show no plan details.
+  const reloadBilling = useCallback(() => {
+    getBilling().then(setBilling, () => {})
+  }, [])
+  useEffect(() => {
+    reloadBilling()
+    const timer = window.setInterval(reloadBilling, BILLING_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [reloadBilling])
+
+  // Each action that changes servers or tools calls this, so it also loads the plan usage again.
   const reloadServers = useCallback(() => {
     getServers().then(
       (list) => {
@@ -100,8 +119,15 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
       },
       (e: Error) => setLoadError(e.message),
     )
-  }, [])
+    reloadBilling()
+  }, [reloadBilling])
   useEffect(reloadServers, [reloadServers])
+  const planState: PlanState = { billing, reload: reloadBilling }
+  const atServerLimit =
+    billing !== null &&
+    servers !== null &&
+    billing.plan.max_servers !== null &&
+    servers.length >= billing.plan.max_servers
 
   const select = (name: string) => {
     setSelectedName(name)
@@ -163,12 +189,16 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
     )
   } else if (!servers) {
     content = null
+  } else if (path === '/billing') {
+    content = <Billing />
   } else if (route && !servers.some((s) => s.name === route.server)) {
     content = (
       <p className="alert" role="alert">
         The server {route.server} does not exist.
       </p>
     )
+  } else if (selected && path === '/new' && atServerLimit && billing) {
+    content = <ServerLimit billing={billing} navigate={navigate} />
   } else if (!selected || path === '/new') {
     content = (
       <Onboarding
@@ -209,12 +239,14 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
       ) : page.path === '/servers' ? (
         <Servers
           servers={servers}
+          atLimit={atServerLimit}
           selected={selected.name}
           onOpen={(name) => {
             select(name)
             navigate('/')
           }}
           onNew={() => navigate('/new')}
+          onOpenBilling={() => navigate('/billing')}
           onRenamed={renamed}
           onDeleted={deleted}
           onRefresh={reloadServers}
@@ -240,7 +272,7 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
   }
 
   return (
-    <>
+    <PlanContext.Provider value={planState}>
       <div className="app">
         <nav className="side" aria-label="Main">
           <Brand />
@@ -317,6 +349,19 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
             <span className="user-name" title={user.name ?? undefined}>
               {user.github_login}
             </span>
+            {billing && (
+              <a
+                className={`plan-badge${billing.plan.is_default ? '' : ' paid'}`}
+                href="/billing"
+                title="Plan & billing"
+                onClick={(event) => {
+                  event.preventDefault()
+                  navigate('/billing')
+                }}
+              >
+                {billing.plan.name}
+              </a>
+            )}
             <button className="btn" type="button" onClick={handleSignOut}>
               Sign out
             </button>
@@ -324,8 +369,76 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
         </nav>
 
         {/* A new key on each page change restarts the page enter animation. */}
-        <main key={servers ? path : 'loading'}>{content}</main>
+        <main key={servers ? path : 'loading'}>
+          {billing && path !== '/billing' && <PlanBanner billing={billing} navigate={navigate} />}
+          {content}
+        </main>
       </div>
-    </>
+    </PlanContext.Provider>
+  )
+}
+
+/** One line about the quota and the paused servers and tools. It is empty when all is well. */
+function bannerText(billing: BillingData): { text: string; tone: 'warn' | 'bad' } | null {
+  const tone = quotaTone(billing)
+  const max = billing.plan.max_calls_per_month
+  if (tone === 'bad') {
+    return {
+      text: `The monthly limit of ${plural(max ?? 0, 'tool call')} is reached. Calls stop until ${dayText(billing.resets_at_ms)}.`,
+      tone,
+    }
+  }
+  const parts: string[] = []
+  if (tone === 'warn') parts.push(`You used ${billing.calls_used} of ${max} tool calls this month.`)
+  const paused = [
+    billing.paused_servers > 0 ? plural(billing.paused_servers, 'server') : null,
+    billing.paused_tools > 0 ? plural(billing.paused_tools, 'tool') : null,
+  ].filter(Boolean)
+  if (paused.length) {
+    const verb = billing.paused_servers + billing.paused_tools === 1 ? 'is' : 'are'
+    parts.push(`${paused.join(' and ')} ${verb} paused by the ${billing.plan.name} plan.`)
+  }
+  return parts.length ? { text: parts.join(' '), tone: 'warn' } : null
+}
+
+function PlanBanner({ billing, navigate }: { billing: BillingData; navigate: (path: string) => void }) {
+  const banner = bannerText(billing)
+  if (!banner) return null
+  return (
+    <p className={`plan-banner ${banner.tone}`} role="status">
+      <span>{banner.text}</span>
+      <a
+        href="/billing"
+        onClick={(event) => {
+          event.preventDefault()
+          navigate('/billing')
+        }}
+      >
+        Plan &amp; billing
+      </a>
+    </p>
+  )
+}
+
+/** Shown instead of the onboarding when the plan allows no more servers. */
+function ServerLimit({ billing, navigate }: { billing: BillingData; navigate: (path: string) => void }) {
+  const max = billing.plan.max_servers ?? 0
+  return (
+    <section className="panel callout">
+      <div>
+        <h2>No room for a new server</h2>
+        <p className="muted">
+          The {billing.plan.name} plan allows {plural(max, 'server')}. Upgrade your plan or delete a server first.
+        </p>
+      </div>
+      <div className="head-actions">
+        <button className="btn" type="button" onClick={() => navigate('/servers')}>
+          All servers
+        </button>
+        <button className="btn primary" type="button" onClick={() => navigate('/billing')}>
+          See the plans
+        </button>
+      </div>
+    </section>
   )
 }

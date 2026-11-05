@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState, type FormEvent } from 'react'
 import { ApiError, deleteServer, renameServer } from './api'
 import { useListAnimation } from './motion'
 import { PixelScenes } from './PixelScenes'
+import { usePlan } from './plans'
 import { isValidServerName } from './serverName'
 import { relative } from './time'
 import type { ServerSummary } from './types/ServerSummary'
@@ -16,6 +17,7 @@ const REFRESH_MS = 30_000
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 
 function status(server: ServerSummary): { label: string; tone: string } {
+  if (server.paused) return { label: 'Paused', tone: 'bad' }
   if (server.apis === 0) return { label: 'setup not done', tone: 'warn' }
   if (server.active_tokens === 0) return { label: 'no active token', tone: 'warn' }
   if (server.connected_clients > 0) return { label: `${plural(server.connected_clients, 'client')} connected`, tone: 'ok' }
@@ -24,16 +26,22 @@ function status(server: ServerSummary): { label: string; tone: string } {
 
 interface ServersProps {
   servers: ServerSummary[]
+  /** True when the plan allows no more servers. */
+  atLimit: boolean
   selected: string
   onOpen: (name: string) => void
   onNew: () => void
+  onOpenBilling: () => void
   onRenamed: (oldName: string, newName: string) => void
   onDeleted: (name: string) => void
   /** Reloads the server list, because the connected client counts change over time. */
   onRefresh: () => void
 }
 
-export function Servers({ servers, selected, onOpen, onNew, onRenamed, onDeleted, onRefresh }: ServersProps) {
+export function Servers({ servers, atLimit, selected, onOpen, onNew, onOpenBilling, onRenamed, onDeleted, onRefresh }: ServersProps) {
+  const { billing } = usePlan()
+  const plan = billing?.plan
+  const maxServers = plan?.max_servers ?? null
   const [now, setNow] = useState(Date.now)
   const [open, setOpen] = useState<{ name: string; form: 'rename' | 'delete' } | null>(null)
   const rowsRef = useListAnimation<HTMLTableSectionElement>()
@@ -52,15 +60,33 @@ export function Servers({ servers, selected, onOpen, onNew, onRenamed, onDeleted
       <div className="head">
         <div>
           <h1>All servers</h1>
-          <div className="sub">Each server has its own MCP URL, APIs, tools, and tokens.</div>
+          <div className="sub">
+            {plan && maxServers !== null && `${servers.length} of ${plural(maxServers, 'server')} (${plan.name}). `}
+            Each server has its own MCP URL, APIs, tools, and tokens.
+          </div>
         </div>
         <PixelScenes />
         <div className="head-actions">
-          <button className="btn primary" type="button" onClick={onNew}>
+          <button className="btn primary" type="button" onClick={onNew} disabled={atLimit}>
             New server
           </button>
         </div>
       </div>
+      {atLimit && plan && maxServers !== null && (
+        <p className="note">
+          The {plan.name} plan allows {plural(maxServers, 'server')}. To add a server, delete one or see{' '}
+          <a
+            href="/billing"
+            onClick={(event) => {
+              event.preventDefault()
+              onOpenBilling()
+            }}
+          >
+            Plan &amp; billing
+          </a>
+          .
+        </p>
+      )}
 
       <section className="panel">
         <div className="scroll">
@@ -97,12 +123,23 @@ export function Servers({ servers, selected, onOpen, onNew, onRenamed, onDeleted
                         {server.name === selected && <span className="muted"> (selected)</span>}
                       </td>
                       <td>
-                        <span className={`pill ${state.tone}`}>{state.label}</span>
+                        <span
+                          className={`pill ${state.tone}`}
+                          title={server.paused ? 'Over the plan limit. It does not answer MCP requests.' : undefined}
+                        >
+                          {state.label}
+                        </span>
                       </td>
                       <td className="num">{server.apis}</td>
                       <td className="num">
                         {server.enabled_tools}
                         <span className="muted"> / {server.tools}</span>
+                        {server.paused_tools > 0 && (
+                          <span className="warn-text" title="Tools that are on, but over the plan limit">
+                            {' '}
+                            ({server.paused_tools} paused)
+                          </span>
+                        )}
                       </td>
                       <td className="num">{server.active_tokens}</td>
                       <td title={server.last_call_ms === null ? undefined : new Date(server.last_call_ms).toLocaleString()}>

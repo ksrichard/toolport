@@ -381,15 +381,8 @@ td.form-cell { white-space: normal; background: var(--panel-2); }
 :root[data-theme="neon"] .site-title::before { content: "> "; opacity: .6; }
 .site-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .site-steps li { display: grid; gap: 6px; align-content: start; padding: 20px; }
-.site-steps h3, .plan h3 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+.site-steps h3, .pt-card h3 { margin: 0; font-size: 1.1rem; font-weight: 600; }
 .step-no { font: 12px var(--f-data); color: var(--ok); letter-spacing: .1em; }
-.plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 12px; }
-.plan { display: grid; gap: 14px; align-content: start; padding: 24px; }
-.plan.featured { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
-.price { margin: 0; font: 600 2rem/1 var(--f-data); }
-.price small { font-size: .45em; font-weight: 400; color: var(--muted); }
-.plan ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
-.plan .btn { justify-self: start; }
 .site-foot {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
   border-top: 1px solid var(--line); padding: 16px 0 8px; color: var(--muted); font-size: 12px;
@@ -408,8 +401,66 @@ td.form-cell { white-space: normal; background: var(--panel-2); }
   .site { gap: 32px; }
   .site-main { gap: 40px; }
   .site-hero { padding: 24px 18px; }
-  .site-steps, .plans { grid-template-columns: 1fr; }
+  .site-steps { grid-template-columns: 1fr; }
 }
+
+/* ---- plans and billing ----
+   The plan table has a row-label column and one card per plan. The rows have a fixed height,
+   so the labels line up with the values of each card. */
+.plan-table { display: grid; grid-template-columns: minmax(140px, .7fr) repeat(var(--plans, 2), minmax(0, 1fr)); gap: 16px; align-items: start; }
+.pt-labels { padding: 17px 0; }
+.pt-head { height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pt-kicker { font: 11px var(--f-data); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.pt-row { height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
+.pt-labels .pt-row { color: var(--muted); }
+.pt-card { padding: 16px 20px; }
+.pt-card dl { margin: 0; }
+.pt-card dt { display: none; color: var(--muted); }
+.pt-card dd { margin: 0; font-family: var(--f-data); font-variant-numeric: tabular-nums; }
+.pt-card .pt-row:first-child dd { font-weight: 600; font-size: 1.05rem; }
+.pt-card.featured { border-color: var(--accent); box-shadow: 0 0 32px -12px color-mix(in srgb, var(--accent) 70%, transparent); }
+:root[data-theme="neon"] .pt-card.featured { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), 0 0 36px -8px var(--accent); }
+:root[data-theme="light"] .pt-card.featured { box-shadow: 0 8px 28px -14px color-mix(in srgb, var(--accent) 60%, transparent); }
+.pt-current { font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); white-space: nowrap; }
+:root[data-theme="neon"] .pt-current { border-radius: 0; }
+.pt-action { display: grid; gap: 6px; justify-items: start; padding-top: 14px; border-top: 1px solid var(--line); }
+@media (max-width: 720px) {
+  .plan-table { grid-template-columns: 1fr; }
+  .pt-labels { display: none; }
+  .pt-card dt { display: block; }
+}
+
+.usage-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 16px 24px; }
+.usage-item .label { color: var(--muted); font-size: 12px; }
+.usage-item .value { font: 600 1.4rem/1.2 var(--f-data); font-variant-numeric: tabular-nums; margin: 2px 0 6px; }
+.usage-item .value small { font-size: .8rem; color: var(--muted); font-weight: 400; }
+.usage-item .delta { font-size: 12px; color: var(--muted); }
+.usage-item .delta.bad-text { color: var(--bad); }
+.usage-bar { height: 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; margin-bottom: 6px; }
+.usage-bar span { display: block; height: 100%; background: var(--accent); transition: width var(--dur-slow) var(--ease); }
+.usage-bar.warn span { background: var(--warn); }
+.usage-bar.bad span { background: var(--bad); }
+:root[data-theme="neon"] .usage-bar, :root[data-theme="neon"] .usage-bar span { border-radius: 0; }
+@media (max-width: 720px) { .usage-grid { grid-template-columns: 1fr; } }
+
+.plan-banner {
+  margin: 0; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px;
+  display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; justify-content: space-between;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.plan-banner.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.plan-banner.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.plan-banner a { color: inherit; font-weight: 600; }
+
+.plan-badge {
+  flex: none; font: 11px var(--f-data); padding: 1px 6px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); color: var(--muted); text-decoration: none;
+}
+.plan-badge.paid { color: var(--accent); border-color: var(--accent); }
+.plan-badge:hover { color: var(--fg); }
+
+.skins button[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
 
 /* ---- motion ----
    Enter and exit animations change only opacity and transform. Hover and focus states fade

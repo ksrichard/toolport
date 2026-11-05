@@ -3,14 +3,18 @@ import type { ToolList } from './toolList'
 import type { ToolSummary } from './types/ToolSummary'
 
 /**
- * Why the switch is locked, or null. A paused tool waits for a free place under the plan limit.
- * An off tool can turn on only when the plan has a free place.
+ * Why the switch is locked, or null. A paused or off tool can turn on only when the plan has a
+ * free place on the server. A served tool can always turn off.
  */
 function lockReason(tool: ToolSummary, list: ToolList, planName: string | undefined, limit: number | null | undefined) {
-  if (tool.paused) return `This tool is paused. The ${planName ?? 'current'} plan serves only ${limit ?? 'some'} tools per server.`
-  if (tool.enabled || limit == null || !list.tools) return null
-  const served = list.tools.filter((t) => t.enabled && !t.paused).length
-  return served >= limit ? `The ${planName ?? 'current'} plan allows ${limit} enabled tools per server. Turn off another tool first.` : null
+  const served = tool.enabled && !tool.paused
+  if (served || limit == null || !list.tools) return null
+  const used = list.tools.filter((t) => t.enabled && !t.paused).length
+  if (used < limit) return null
+  const plan = planName ?? 'current'
+  return tool.paused
+    ? `This tool is paused. The ${plan} plan allows ${limit} enabled tools per server. Turn off another tool first.`
+    : `The ${plan} plan allows ${limit} enabled tools per server. Turn off another tool first.`
 }
 
 export function ToolSwitch({ tool, list }: { tool: ToolSummary; list: ToolList }) {

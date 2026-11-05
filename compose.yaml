@@ -35,6 +35,9 @@ services:
       ALLOW_LOCAL_UPSTREAM: ${ALLOW_LOCAL_UPSTREAM:-false}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?set GITHUB_CLIENT_ID in .env}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?set GITHUB_CLIENT_SECRET in .env}
+      # Payments are off when one of the two is empty.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,6 +57,23 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+    depends_on:
+      - server
+
+  # Local payment tests only: docker compose --profile stripe up --build
+  # It gets the Stripe test events and sends them to the server webhook in the Compose network.
+  # The key goes in through STRIPE_API_KEY and not as a flag, so it is not in the process list.
+  stripe-cli:
+    image: stripe/stripe-cli:v1.54.1
+    profiles: ["stripe"]
+    environment:
+      STRIPE_API_KEY: ${STRIPE_SECRET_KEY:-}
+    command:
+      - listen
+      - --events
+      - checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.paid,invoice.payment_failed
+      - --forward-to
+      - http://server:8080/api/billing/webhook
     depends_on:
       - server
 

@@ -129,6 +129,10 @@ main { display: grid; gap: 16px; align-content: start; min-width: 0; }
 .panel h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
 .callout { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; border-color: var(--accent); }
 .callout h2 { margin-bottom: 4px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.paused-view { opacity: .45; filter: grayscale(1); pointer-events: none; user-select: none; }
+.endpoint.is-disabled { opacity: .5; }
+.endpoint.is-disabled code { text-decoration: line-through; }
 
 /* KPI strip: one panel, four cells */
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); padding: 0; }

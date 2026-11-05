@@ -257,6 +257,7 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
           server={selected}
           onToolsChanged={reloadServers}
           onConnectClient={() => navigate('/connect')}
+          navigate={navigate}
           onOpenTool={(tool) =>
             navigate(`/servers/${encodeURIComponent(selected.name)}/tools/${encodeURIComponent(tool ?? 'new')}`)
           }

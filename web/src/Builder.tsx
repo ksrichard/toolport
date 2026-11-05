@@ -11,6 +11,7 @@ import {
   detachTool,
   getApis,
   getTool,
+  getTools,
   resetTool,
   testDraftTool,
   testTool,
@@ -756,9 +757,11 @@ interface BuilderProps {
   tool: string | null
   navigate: (path: string) => void
   onChanged: () => void
+  /** True when the plan pauses the whole server. */
+  serverPaused?: boolean
 }
 
-export function Builder({ server, tool, navigate, onChanged }: BuilderProps) {
+export function Builder({ server, tool, navigate, onChanged, serverPaused = false }: BuilderProps) {
   const [view, setView] = useState<ToolView | null>(null)
   const [loaded, setLoaded] = useState(tool === null)
   const [error, setError] = useState<string | null>(null)
@@ -782,6 +785,21 @@ export function Builder({ server, tool, navigate, onChanged }: BuilderProps) {
   }, [server, tool])
 
   const [back] = useState(() => (window.history.state?.from === '/tools' ? '/tools' : '/'))
+
+  // The tool view has no plan state, so the paused flag comes from the tool list.
+  const [toolPaused, setToolPaused] = useState(false)
+  useEffect(() => {
+    if (tool === null) return
+    let cancelled = false
+    getTools(server).then(
+      (list) => !cancelled && setToolPaused(list.some((t) => t.name === tool && t.paused)),
+      () => {},
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [server, tool])
+  const paused = serverPaused || toolPaused
 
   const saved = (result: Saved) => {
     if (result.kind !== 'tool') return
@@ -814,16 +832,40 @@ export function Builder({ server, tool, navigate, onChanged }: BuilderProps) {
           Could not load the tool: {error}
         </p>
       ) : loaded ? (
-        <ToolForm
-          key={`${tool ?? 'new'}/${version}`}
-          server={server}
-          initial={view}
-          onSaved={saved}
-          onDeleted={() => {
-            onChanged()
-            navigate(back)
-          }}
-        />
+        <>
+          {paused && (
+            <section className="panel callout" role="status">
+              <div>
+                <h2>{serverPaused ? 'This server is paused' : 'This tool is paused'}</h2>
+                <p className="muted">
+                  {serverPaused
+                    ? 'The server is over the plan limit, so you cannot test or change its tools.'
+                    : 'The server has more enabled tools than the plan allows, so MCP clients cannot see or call this tool. Upgrade your plan, or turn off another tool on the Tools page.'}
+                </p>
+              </div>
+              <div className="row-actions">
+                <button className="btn primary" type="button" onClick={() => navigate('/billing')}>
+                  Go to Plan &amp; billing
+                </button>
+                <button className="btn" type="button" onClick={() => navigate('/tools')}>
+                  Open Tools
+                </button>
+              </div>
+            </section>
+          )}
+          <div className={paused ? 'paused-view' : undefined} inert={paused}>
+            <ToolForm
+              key={`${tool ?? 'new'}/${version}`}
+              server={server}
+              initial={view}
+              onSaved={saved}
+              onDeleted={() => {
+                onChanged()
+                navigate(back)
+              }}
+            />
+          </div>
+        </>
       ) : null}
     </>
   )

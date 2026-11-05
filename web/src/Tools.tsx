@@ -103,7 +103,7 @@ interface ToolRowProps {
 
 function ToolRow({ tool, list, href, navigate }: ToolRowProps) {
   return (
-    <li>
+    <li className={tool.paused ? 'is-paused' : undefined}>
       <ToolSwitch tool={tool} list={list} />
       <div className="t">
         <div className="tool-name">

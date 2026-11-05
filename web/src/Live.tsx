@@ -490,7 +490,7 @@ function Tools({
       )}
       <ul className="list" ref={listRef}>
         {list.tools?.map((t) => (
-          <li key={t.name} className="tool">
+          <li key={t.name} className={t.paused ? 'tool is-paused' : 'tool'}>
             <div className="t">
               <div>
                 <a

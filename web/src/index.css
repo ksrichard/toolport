@@ -50,6 +50,7 @@ a { color: var(--accent); }
 
 .brand { font: 600 var(--brand-size)/1 var(--f-brand); display: flex; align-items: center; gap: 10px; }
 .brand svg { flex: none; }
+a.brand { color: inherit; text-decoration: none; width: fit-content; }
 :root[data-theme="neon"] .brand { color: var(--accent); text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
 
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
@@ -368,7 +369,6 @@ td.form-cell { white-space: normal; background: var(--panel-2); }
 /* public pages: landing, terms, privacy */
 .site { max-width: 1040px; margin: 0 auto; display: grid; gap: 48px; padding: 8px 0 0; }
 .site-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.home-link { color: inherit; text-decoration: none; }
 .site-main { gap: 56px; }
 .site-hero {
   display: grid; justify-items: start; gap: 16px; padding: 40px 32px;
@@ -507,6 +507,8 @@ tr.new td { animation: flash 1.2s ease-out; }
 
 /* Theme change. Shell.tsx sets the class for a moment, so the first page load does not fade. */
 @media (prefers-reduced-motion: no-preference) {
+  .brand:hover svg, .brand:focus-visible svg { animation: brand-pulse 1.2s var(--ease) infinite; }
+  :root[data-theme="neon"] .brand:hover, :root[data-theme="neon"] .brand:focus-visible { animation: brand-glow 1.2s var(--ease) infinite; }
   .theme-change, .theme-change *, .theme-change *::before, .theme-change *::after {
     transition: color var(--dur-slow) var(--ease), background-color var(--dur-slow) var(--ease),
       border-color var(--dur-slow) var(--ease), box-shadow var(--dur-slow) var(--ease),
@@ -607,4 +609,10 @@ tr.new td { animation: flash 1.2s ease-out; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+@keyframes brand-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+@keyframes brand-glow {
+  0%, 100% { text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
+  50% { text-shadow: 0 0 20px color-mix(in srgb, var(--accent) 95%, transparent); }
 }

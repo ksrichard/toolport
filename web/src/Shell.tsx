@@ -275,7 +275,7 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
     <PlanContext.Provider value={planState}>
       <div className="app">
         <nav className="side" aria-label="Main">
-          <Brand />
+          <Brand onNavigate={() => navigate('/')} />
           {selected && (
             <div>
               <div className="group">

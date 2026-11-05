@@ -8,9 +8,7 @@ export function Legal({ page }: { page: LegalPage }) {
   return (
     <div className="site">
       <header className="site-head">
-        <a href="/" className="home-link" aria-label="ToolPort home">
-          <Brand />
-        </a>
+        <Brand />
       </header>
       <main className="legal">
         {page === 'terms' ? <Terms /> : <Privacy />}

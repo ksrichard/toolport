@@ -14,8 +14,14 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    auth::github::GithubError, import::ImportError, mcp::CallError, mcp_tokens::TokenError,
-    plan::LimitError, secrets::SecretsError, tools::DraftError,
+    auth::github::GithubError,
+    import::ImportError,
+    mcp::CallError,
+    mcp_tokens::TokenError,
+    payments::{PaymentsConfigError, PaymentsError},
+    plan::LimitError,
+    secrets::SecretsError,
+    tools::DraftError,
 };
 
 /// Errors that stop the server before or while it serves requests.
@@ -35,6 +41,8 @@ pub enum StartupError {
         #[source]
         source: std::io::Error,
     },
+    #[error("cannot set up the Stripe client")]
+    Payments(#[source] PaymentsConfigError),
     #[error("the HTTP server stopped with an error")]
     Serve(#[source] std::io::Error),
 }
@@ -120,6 +128,20 @@ pub enum ApiError {
     TestNeedsDraft,
     #[error("{0}")]
     Plan(#[from] LimitError),
+    #[error("payments are not set up on this server")]
+    BillingNotConfigured,
+    #[error("the plan {0} cannot be bought")]
+    InvalidPlan(String),
+    #[error("you already have a subscription, use Manage billing to change it")]
+    AlreadySubscribed,
+    #[error("you have no Stripe customer yet, start with an upgrade")]
+    NoCustomer,
+    #[error("Stripe is not available, try again later")]
+    Payments(#[from] PaymentsError),
+    #[error("the Stripe signature is not valid")]
+    InvalidSignature,
+    #[error("the webhook body is not a valid Stripe event")]
+    InvalidEvent,
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -181,6 +203,12 @@ impl ApiError {
                 _ => StatusCode::UNPROCESSABLE_ENTITY,
             },
             Self::Plan(error) => limit_status(error),
+            Self::BillingNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
+            Self::InvalidPlan(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::AlreadySubscribed | Self::NoCustomer => StatusCode::CONFLICT,
+            Self::Payments(PaymentsError::UnknownPrice(_)) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Payments(_) => StatusCode::BAD_GATEWAY,
+            Self::InvalidSignature | Self::InvalidEvent => StatusCode::BAD_REQUEST,
             Self::Token(error) => match error {
                 TokenError::EmptyName
                 | TokenError::NameTooLong(_)
@@ -248,6 +276,14 @@ impl ApiError {
                 ImportError::Plan(error) => limit_code(error),
             },
             Self::Plan(error) => limit_code(error),
+            Self::BillingNotConfigured => "billing_not_configured",
+            Self::InvalidPlan(_) => "invalid_plan",
+            Self::AlreadySubscribed => "already_subscribed",
+            Self::NoCustomer => "no_customer",
+            Self::Payments(PaymentsError::UnknownPrice(_)) => "price_not_found",
+            Self::Payments(_) => "stripe_unavailable",
+            Self::InvalidSignature => "invalid_signature",
+            Self::InvalidEvent => "invalid_event",
             Self::Token(error) => match error {
                 TokenError::EmptyName | TokenError::NameTooLong(_) => "invalid_token_name",
                 TokenError::InvalidLifetime(_) => "invalid_token_lifetime",

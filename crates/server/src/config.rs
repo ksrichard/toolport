@@ -87,6 +87,18 @@ pub struct Config {
         hide = true
     )]
     pub github_api_url: Url,
+
+    /// Stripe secret API key. Payments are off without it.
+    #[arg(long, env = "STRIPE_SECRET_KEY", hide_env_values = true)]
+    pub stripe_secret_key: Option<String>,
+
+    /// Signing secret of the Stripe webhook. Payments are off without it.
+    #[arg(long, env = "STRIPE_WEBHOOK_SECRET", hide_env_values = true)]
+    pub stripe_webhook_secret: Option<String>,
+
+    /// Base URL for the Stripe API. Tests point it to a fake Stripe.
+    #[arg(long, env = "STRIPE_API_URL", hide = true)]
+    pub stripe_api_url: Option<Url>,
 }
 
 #[derive(Debug, thiserror::Error)]

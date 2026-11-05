@@ -8,6 +8,13 @@ default-run = "server"
 
 [dependencies]
 aes-gcm = "0.10"
+# Stripe client (owner approved). rustls only, no OpenSSL. Pinned, because 1.0 is a release candidate.
+async-stripe = { version = "=1.0.0-rc.10", default-features = false, features = ["rustls-aws-lc-rs", "rustls-tls-webpki-roots"] }
+async-stripe-billing = { version = "=1.0.0-rc.10", default-features = false, features = ["billing_portal_session", "billing_portal_configuration", "subscription"] }
+async-stripe-checkout = { version = "=1.0.0-rc.10", default-features = false, features = ["checkout_session"] }
+async-stripe-core = { version = "=1.0.0-rc.10", default-features = false, features = ["customer"] }
+async-stripe-product = { version = "=1.0.0-rc.10", default-features = false, features = ["price"] }
+async-stripe-webhook = { version = "=1.0.0-rc.10", default-features = false }
 axum = { version = "0.8.9", features = ["macros"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }

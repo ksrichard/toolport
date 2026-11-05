@@ -1421,3 +1421,64 @@ async fn plan_change_notifies_the_open_sessions(pool: PgPool) {
         }
     }
 }
+
+/// A Stripe webhook that ends the subscription moves the user to Free and tells the clients.
+#[sqlx::test(migrations = "../../migrations")]
+async fn webhook_plan_change_sends_list_changed(pool: PgPool) {
+    let (stripe_url, stripe) = common::fake_stripe().await;
+    let (app, state) = setup_config(pool.clone(), |config| {
+        common::with_stripe(config, &stripe_url);
+    })
+    .await;
+    let user = octocat(&pool).await;
+    sqlx::query("UPDATE users SET stripe_customer_id = 'cus_test_1' WHERE id = $1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let ended = common::subscription_json(
+        "sub_1",
+        "cus_test_1",
+        "canceled",
+        common::PRO_LOOKUP_KEY,
+        (1_780_000_000, 1_782_592_000),
+        false,
+    );
+    stripe
+        .lock()
+        .unwrap()
+        .subscriptions
+        .insert("sub_1".into(), ended.clone());
+
+    let client = Client::connect(&app, &state, "pets").await;
+    client.tool_names().await;
+    let request = Request::get("/mcp/pets")
+        .header(header::HOST, HOST)
+        .header(header::ACCEPT, "text/event-stream")
+        .header(header::AUTHORIZATION, format!("Bearer {}", client.token))
+        .header(SESSION_HEADER, &client.session)
+        .body(Body::empty())
+        .unwrap();
+    let mut stream = app.clone().oneshot(request).await.unwrap().into_body();
+
+    let payload = common::stripe_event("evt_1", "customer.subscription.deleted", ended);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let webhook = common::signed_webhook(&payload, common::WEBHOOK_SECRET, now);
+    let response = app.clone().oneshot(webhook).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut seen = String::new();
+    while !seen.contains("notifications/tools/list_changed") {
+        let frame = tokio::time::timeout(Duration::from_secs(5), stream.frame())
+            .await
+            .expect("no event in 5 s")
+            .expect("stream ended")
+            .unwrap();
+        if let Some(data) = frame.data_ref() {
+            seen.push_str(&String::from_utf8_lossy(data));
+        }
+    }
+}

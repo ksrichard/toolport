@@ -228,6 +228,7 @@ export function Shell({ user, onUserChange, onSignedOut }: ShellProps) {
         server={selected.name}
         tool={route.tool}
         navigate={navigate}
+        serverPaused={selected.paused}
         onChanged={reloadServers}
       />
     ) : page.path === '/apis' ? (

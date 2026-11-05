@@ -30,7 +30,7 @@ use crate::{
     error::{ApiError, error_chain},
     live::{CallEvent, FirstRequest, LiveHub},
     mcp_tokens::{self, AuthorizeError, McpCaller},
-    plan::{self, AccountPlan, Plan},
+    plan::{self, AccountPlan},
     rate_limit::RateLimiter,
     secrets::{SecretsError, SecretsKey},
     sessions::SessionPeers,
@@ -185,14 +185,13 @@ impl ToolportMcp {
         Ok(account)
     }
 
-    /// Only the first enabled tools by id, up to the plan limit. `LIMIT NULL` means no limit.
-    async fn tools(&self, caller: &McpCaller, plan: &Plan) -> Result<Vec<Tool>, CallError> {
+    /// The enabled tools. A tool that the plan pauses is off, so it is not in the list.
+    async fn tools(&self, caller: &McpCaller) -> Result<Vec<Tool>, CallError> {
         let rows: Vec<(String, String, Json<JsonObject>)> = sqlx::query_as(
             "SELECT name, description, input_schema FROM tools
-             WHERE server_id = $1 AND enabled ORDER BY id LIMIT $2",
+             WHERE server_id = $1 AND enabled ORDER BY id",
         )
         .bind(caller.server_id)
-        .bind(plan.max_tools_per_server.map(i64::from))
         .fetch_all(&self.pool)
         .await
         .map_err(CallError::Database)?;
@@ -217,23 +216,21 @@ impl ToolportMcp {
             String,
             Option<String>,
             Option<Vec<u8>>,
-            i64,
+            bool,
         );
         let row: Option<Row> = sqlx::query_as(
-            "SELECT t.request, a.id, a.base_url, a.auth_type, a.auth_header, a.auth_secret, t.id
+            "SELECT t.request, a.id, a.base_url, a.auth_type, a.auth_header, a.auth_secret,
+                    t.plan_paused
              FROM tools t JOIN apis a ON a.id = t.api_id
-             WHERE t.server_id = $1 AND t.name = $2 AND t.enabled",
+             WHERE t.server_id = $1 AND t.name = $2 AND (t.enabled OR t.plan_paused)",
         )
         .bind(caller.server_id)
         .bind(tool)
         .fetch_optional(&self.pool)
         .await
         .map_err(CallError::Database)?;
-        let (Json(template), id, base_url, auth_type, auth_header, auth_secret, tool_id) =
+        let (Json(template), id, base_url, auth_type, auth_header, auth_secret, paused) =
             row.ok_or_else(|| CallError::UnknownTool(tool.to_owned()))?;
-        let paused = plan::tool_is_paused(&self.pool, caller.server_id, tool_id, &account.plan)
-            .await
-            .map_err(CallError::Database)?;
         if paused {
             let text = plan::paused_tool_message(&account.plan, tool);
             return Ok(CallToolResult::error(vec![ContentBlock::text(text)]));
@@ -357,8 +354,8 @@ impl ServerHandler for ToolportMcp {
         self.register_peer(&caller, &context.extensions, &context.peer);
         let client = client_name(&context);
         let is_new = self.live.seen(&caller, client.as_deref());
-        let account = self.served_plan(&caller).await?;
-        let tools = self.tools(&caller, &account.plan).await?;
+        self.served_plan(&caller).await?;
+        let tools = self.tools(&caller).await?;
         if is_new {
             let count = u32::try_from(tools.len()).ok();
             self.announce(&caller, client, "tools/list", count);

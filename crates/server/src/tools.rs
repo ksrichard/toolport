@@ -741,7 +741,7 @@ async fn check_test_plan(
     let Some(tool_id) = tool_id else {
         return Ok(());
     };
-    let paused = plan::tool_is_paused(&state.pool, server_id, tool_id, &account.plan)
+    let paused = plan::tool_is_paused(&state.pool, tool_id)
         .await
         .map_err(ApiError::Database)?;
     if paused {
@@ -995,8 +995,9 @@ async fn insert_manual_tool(
     enabled: bool,
 ) -> Result<(), ApiError> {
     sqlx::query(
-        "INSERT INTO tools (api_id, server_id, name, description, input_schema, request, source, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, 'manual', $7)",
+        "INSERT INTO tools (api_id, server_id, name, description, input_schema, request, source,
+                            enabled, plan_paused)
+         VALUES ($1, $2, $3, $4, $5, $6, 'manual', $7, NOT $7)",
     )
     .bind(api_id)
     .bind(server_id)
@@ -1031,7 +1032,7 @@ async fn create_tool(
     let tool = draft_to_tool(&body.draft)?;
     api_in_server(&state.pool, server_id, body.api_id).await?;
     let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
-    // Over the plan limit, the new tool starts off, as a spec import does.
+    // Over the plan limit, the new tool starts paused, as a spec import does.
     let enabled = plan::tool_room(&mut tx, server_id).await?.take();
     insert_manual_tool(&mut tx, server_id, body.api_id, &tool, enabled).await?;
     tx.commit().await.map_err(ApiError::Database)?;
@@ -1267,7 +1268,8 @@ async fn set_tool_enabled(
             return Err(ApiError::LastEnabledTool);
         }
     }
-    let updated = sqlx::query("UPDATE tools SET enabled = $2 WHERE id = $1")
+    // The user decides now, so the plan pause ends in both directions.
+    let updated = sqlx::query("UPDATE tools SET enabled = $2, plan_paused = false WHERE id = $1")
         .bind(tool_id)
         .bind(body.enabled)
         .execute(&mut *tx)

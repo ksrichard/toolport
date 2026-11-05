@@ -154,7 +154,7 @@ pub async fn import_spec(
     if server_created {
         plan::check_server_limit(&mut tx, owner_id, 0).await?;
     }
-    // New tools over the plan limit start off. The tools that are on now stay on.
+    // New tools over the plan limit start paused. The tools that are on now stay on.
     let mut room = plan::tool_room(&mut tx, server_id).await?;
 
     let existing: Option<i64> =
@@ -244,8 +244,9 @@ pub async fn import_spec(
                 let enabled = room.take();
                 sqlx::query(
                     "INSERT INTO tools (api_id, server_id, name, description, input_schema,
-                                        request, source, spec_tool, spec_hash, operation, enabled)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'spec', $7, $8, $9, $10)",
+                                        request, source, spec_tool, spec_hash, operation, enabled,
+                                        plan_paused)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'spec', $7, $8, $9, $10, NOT $10)",
                 )
                 .bind(api_id)
                 .bind(server_id)

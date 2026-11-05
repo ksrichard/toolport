@@ -311,25 +311,127 @@ pub async fn server_is_served(
     Ok(older < max)
 }
 
-/// True when the tool is on but over the tool limit of the plan. Only the first enabled
-/// tools by id are served. `LIMIT NULL` means no limit.
-pub async fn tool_is_paused(
-    pool: &PgPool,
-    server_id: i64,
-    tool_id: i64,
-    plan: &Plan,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT t.enabled AND t.id NOT IN (SELECT id FROM tools WHERE server_id = $1 AND enabled
-                                          ORDER BY id LIMIT $3)
-         FROM tools t WHERE t.server_id = $1 AND t.id = $2",
+/// True when the plan paused the tool. A paused tool is off until a place is free.
+pub async fn tool_is_paused(pool: &PgPool, tool_id: i64) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT plan_paused FROM tools WHERE id = $1")
+        .bind(tool_id)
+        .fetch_optional(pool)
+        .await
+        .map(|paused| paused.unwrap_or(false))
+}
+
+/// Applies the tool limit of the plan when it differs from `users.tool_limit_applied`.
+/// A lower limit pauses the enabled tools after the first N by id on each server. A higher
+/// limit turns the paused tools on again, by id, up to the new limit. With the same limit
+/// nothing changes, so a place that the user made free stays free.
+/// Returns the servers whose served tools changed.
+pub async fn reconcile_tools(tx: &mut PgConnection, user_id: i64) -> Result<Vec<i64>, sqlx::Error> {
+    let row: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
+        "SELECT p.max_tools_per_server, u.tool_limit_applied
+         FROM users u JOIN plans p ON p.id = u.plan_id WHERE u.id = $1 FOR NO KEY UPDATE OF u",
     )
-    .bind(server_id)
-    .bind(tool_id)
-    .bind(plan.max_tools_per_server.map(i64::from))
-    .fetch_optional(pool)
-    .await
-    .map(|paused| paused.unwrap_or(false))
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((limit, applied)) = row else {
+        return Ok(Vec::new());
+    };
+    if limit == applied {
+        return Ok(Vec::new());
+    }
+    // `tool_room` locks the server row too, so a tool switch waits for this change.
+    sqlx::query("SELECT id FROM servers WHERE user_id = $1 ORDER BY id FOR NO KEY UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let lower = match (limit, applied) {
+        (Some(limit), Some(applied)) => limit < applied,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    let mut changed: Vec<i64> = if lower {
+        sqlx::query_scalar(
+            "WITH ranked AS (
+                 SELECT t.id, row_number() OVER (PARTITION BY t.server_id ORDER BY t.id) AS n
+                 FROM tools t JOIN servers s ON s.id = t.server_id
+                 WHERE s.user_id = $1 AND t.enabled
+             )
+             UPDATE tools SET enabled = false, plan_paused = true
+             FROM ranked WHERE tools.id = ranked.id AND ranked.n > $2
+             RETURNING tools.server_id",
+        )
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await?
+    } else {
+        sqlx::query_scalar(
+            "WITH used AS (
+                 SELECT s.id AS server_id, count(t.id) FILTER (WHERE t.enabled) AS on_count
+                 FROM servers s LEFT JOIN tools t ON t.server_id = s.id
+                 WHERE s.user_id = $1 GROUP BY s.id
+             ),
+             ranked AS (
+                 SELECT t.id, t.server_id,
+                        row_number() OVER (PARTITION BY t.server_id ORDER BY t.id) AS n
+                 FROM tools t JOIN servers s ON s.id = t.server_id
+                 WHERE s.user_id = $1 AND t.plan_paused
+             )
+             UPDATE tools SET enabled = true, plan_paused = false
+             FROM ranked JOIN used ON used.server_id = ranked.server_id
+             WHERE tools.id = ranked.id AND ($2::int IS NULL OR ranked.n + used.on_count <= $2)
+             RETURNING tools.server_id",
+        )
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await?
+    };
+    sqlx::query("UPDATE users SET tool_limit_applied = $2 WHERE id = $1")
+        .bind(user_id)
+        .bind(limit)
+        .execute(&mut *tx)
+        .await?;
+    changed.sort_unstable();
+    changed.dedup();
+    Ok(changed)
+}
+
+/// Reconciles every user whose plan limit changed without a webhook, for example after a
+/// manual edit of the `plans` table. Tells the open sessions of each changed server.
+pub async fn reconcile_all(state: &AppState) -> Result<usize, sqlx::Error> {
+    let users: Vec<i64> = sqlx::query_scalar(
+        "SELECT u.id FROM users u JOIN plans p ON p.id = u.plan_id
+         WHERE u.tool_limit_applied IS DISTINCT FROM p.max_tools_per_server",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    for &user_id in &users {
+        let mut tx = state.pool.begin().await?;
+        let changed = reconcile_tools(&mut tx, user_id).await?;
+        tx.commit().await?;
+        for server_id in changed {
+            state.peers.notify_tools_changed(server_id).await;
+        }
+    }
+    Ok(users.len())
+}
+
+/// Runs `reconcile_all` at each interval until the process stops.
+pub fn spawn_reconcile(state: AppState, interval: std::time::Duration) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        loop {
+            ticker.tick().await;
+            match reconcile_all(&state).await {
+                Ok(0) => {}
+                Ok(users) => tracing::info!(users, "tool limits applied after a plan change"),
+                Err(error) => {
+                    tracing::error!(error = %crate::error::error_chain(&error), "tool limit reconcile failed");
+                }
+            }
+        }
+    });
 }
 
 /// Takes one call from the monthly quota with one atomic statement. Returns false when the

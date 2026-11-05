@@ -1191,7 +1191,7 @@ async fn saved_calls(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
-/// Free serves only the first 3 enabled tools by id. The 4th stays enabled in the DB.
+/// A move to Free pauses the enabled tools after the first 3 by id. Pro turns them on again.
 #[sqlx::test(migrations = "../../migrations")]
 async fn free_plan_serves_the_first_three_tools(pool: PgPool) {
     let (app, state) = setup(pool.clone(), 10_000).await;
@@ -1218,9 +1218,9 @@ async fn free_plan_serves_the_first_three_tools(pool: PgPool) {
     );
 }
 
-/// The limits come from the plans table, without a restart.
+/// A manual edit of the plans table sends no webhook. The hourly reconcile applies it.
 #[sqlx::test(migrations = "../../migrations")]
-async fn a_change_in_the_plans_table_applies_to_the_next_request(pool: PgPool) {
+async fn a_change_in_the_plans_table_applies_after_the_reconcile(pool: PgPool) {
     let (app, state) = setup(pool.clone(), 10_000).await;
     common::set_plan(&pool, octocat(&pool).await, "free").await;
     let client = Client::connect(&app, &state, "pets").await;
@@ -1229,7 +1229,11 @@ async fn a_change_in_the_plans_table_applies_to_the_next_request(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
+    assert_eq!(client.tool_names().await.len(), 3);
+    assert_eq!(server::plan::reconcile_all(&state).await.unwrap(), 1);
     assert_eq!(client.tool_names().await, ["getPet", "createPet"]);
+    // The next run finds nothing to do.
+    assert_eq!(server::plan::reconcile_all(&state).await.unwrap(), 0);
 }
 
 /// Only the oldest servers of the account serve MCP on a smaller plan.
@@ -1481,4 +1485,6 @@ async fn webhook_plan_change_sends_list_changed(pool: PgPool) {
             seen.push_str(&String::from_utf8_lossy(data));
         }
     }
+    // The downgrade paused the 4th tool.
+    assert_eq!(client.tool_names().await, ["getPet", "createPet", "slow"]);
 }

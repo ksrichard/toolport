@@ -54,6 +54,8 @@ async fn run(config: Config) -> Result<(), StartupError> {
         Duration::from_secs(config.spec_check_interval_secs),
     );
     calls::spawn_cleanup(state.pool.clone(), CALL_CLEANUP_INTERVAL);
+    // A manual edit of the `plans` table sends no webhook, so the tool limits apply here.
+    server::plan::spawn_reconcile(state.clone(), CALL_CLEANUP_INTERVAL);
     axum::serve(listener, server::app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await

@@ -379,6 +379,9 @@ async fn apply_event(
     .execute(&mut *tx)
     .await
     .map_err(ApiError::Database)?;
+    plan::reconcile_tools(&mut tx, user_id)
+        .await
+        .map_err(ApiError::Database)?;
     tx.commit().await.map_err(ApiError::Database)?;
     tracing::info!(user_id, status = %sub.status, plan_id, "Stripe subscription stored");
 
@@ -408,11 +411,8 @@ async fn billing(State(state): State<AppState>, auth: AuthUser) -> Result<Json<B
                     (SELECT count(*) FROM servers s WHERE s.user_id = u.id),
                     (SELECT greatest(count(*) - coalesce(p.max_servers, count(*)), 0)
                         FROM servers s WHERE s.user_id = u.id),
-                    (SELECT count(*) FROM (
-                        SELECT row_number() OVER (PARTITION BY t.server_id ORDER BY t.id) AS n
-                        FROM tools t JOIN servers s ON s.id = t.server_id
-                        WHERE s.user_id = u.id AND t.enabled
-                     ) e WHERE e.n > p.max_tools_per_server)
+                    (SELECT count(*) FROM tools t JOIN servers s ON s.id = t.server_id
+                     WHERE s.user_id = u.id AND t.plan_paused)
              FROM users u JOIN plans p ON p.id = u.plan_id WHERE u.id = $1",
         )
         .bind(auth.user_id)

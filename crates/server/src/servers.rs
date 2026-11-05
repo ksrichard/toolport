@@ -187,8 +187,8 @@ async fn summaries(
     let mut servers: Vec<ServerSummary> = sqlx::query_as(
         "SELECT s.id, s.name,
                 (p.max_servers IS NOT NULL AND s.rank > p.max_servers) AS paused,
-                (SELECT greatest(count(*) - coalesce(p.max_tools_per_server, count(*)), 0)
-                    FROM tools t WHERE t.server_id = s.id AND t.enabled) AS paused_tools,
+                (SELECT count(*) FROM tools t WHERE t.server_id = s.id AND t.plan_paused)
+                    AS paused_tools,
                 (SELECT count(*) FROM apis a WHERE a.server_id = s.id) AS apis,
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id) AS tools,
                 (SELECT count(*) FROM tools t WHERE t.server_id = s.id AND t.enabled) AS enabled_tools,
@@ -326,10 +326,7 @@ async fn list_tools(
                 t.source, t.edited,
                 (t.edited AND t.edited_hash IS NOT NULL AND t.spec_hash <> t.edited_hash)
                     AS spec_changed,
-                (t.enabled AND p.max_tools_per_server IS NOT NULL
-                    AND (SELECT count(*) FROM tools e
-                         WHERE e.server_id = t.server_id AND e.enabled AND e.id < t.id)
-                        >= p.max_tools_per_server) AS paused
+                t.plan_paused AS paused
          FROM tools t JOIN apis a ON a.id = t.api_id
          JOIN servers s ON s.id = t.server_id JOIN users u ON u.id = s.user_id
          JOIN plans p ON p.id = u.plan_id

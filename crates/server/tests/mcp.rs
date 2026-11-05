@@ -120,8 +120,10 @@ async fn setup_with(pool: PgPool, timeout_ms: u64, allow_local: bool) -> (Router
     .await
 }
 
+/// The user is on Pro, because the tests use several servers and more tools than Free allows.
 async fn setup_config(pool: PgPool, change: impl FnOnce(&mut Config)) -> (Router, AppState) {
-    common::create_user(&pool, 1, "octocat").await;
+    let user = common::create_user(&pool, 1, "octocat").await;
+    common::set_plan(&pool, user, "pro").await;
     import(&pool, "pets", UPSTREAM_SPEC, fake_upstream().await).await;
     let mut config = common::config(&common::fake_github().await);
     change(&mut config);
@@ -1136,4 +1138,286 @@ async fn delete_stops_the_tokens_and_closes_the_sessions(pool: PgPool) {
 
     let response = dashboard(&app, &state, "GET", "/api/servers", None).await;
     assert_eq!(common::json_body(response).await[0]["connected_clients"], 0);
+}
+
+async fn octocat(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT id FROM users WHERE github_login = 'octocat'")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// The calls of the user in the current quota period.
+async fn usage(state: &AppState, user: i64) -> i64 {
+    let account = server::plan::account_plan(&state.pool, user)
+        .await
+        .unwrap()
+        .unwrap();
+    server::plan::calls_used(&state.pool, user, &account)
+        .await
+        .unwrap()
+}
+
+async fn set_usage(pool: &PgPool, user: i64, period_start: &str, calls: i32) {
+    sqlx::query(
+        "INSERT INTO usage (user_id, period_start, calls) VALUES ($1, $2::timestamptz, $3)
+         ON CONFLICT (user_id, period_start) DO UPDATE SET calls = EXCLUDED.calls",
+    )
+    .bind(user)
+    .bind(period_start)
+    .bind(calls)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+macro_rules! this_month {
+    () => {
+        "date_trunc('month', now(), 'UTC')"
+    };
+}
+
+async fn this_month(pool: &PgPool) -> String {
+    sqlx::query_scalar(concat!("SELECT ", this_month!(), "::text"))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn saved_calls(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM calls")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Free serves only the first 3 enabled tools by id. The 4th stays enabled in the DB.
+#[sqlx::test(migrations = "../../migrations")]
+async fn free_plan_serves_the_first_three_tools(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let user = octocat(&pool).await;
+    common::set_plan(&pool, user, "free").await;
+    let client = Client::connect(&app, &state, "pets").await;
+    assert_eq!(client.tool_names().await, ["getPet", "createPet", "slow"]);
+
+    let result = client.call("big", json!({})).await;
+    assert_eq!(result["isError"], true);
+    assert_eq!(
+        text(&result),
+        "the tool big is paused: the Free plan allows 3 enabled tools per server. Upgrade or turn off another tool."
+    );
+    // A paused tool does not reach the upstream, so it is not logged and not counted.
+    assert_eq!(saved_calls(&pool).await, 0);
+    assert_eq!(usage(&state, user).await, 0);
+
+    // Pro serves all tools again.
+    common::set_plan(&pool, user, "pro").await;
+    assert_eq!(
+        client.tool_names().await,
+        ["getPet", "createPet", "slow", "big"]
+    );
+}
+
+/// The limits come from the plans table, without a restart.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_change_in_the_plans_table_applies_to_the_next_request(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    common::set_plan(&pool, octocat(&pool).await, "free").await;
+    let client = Client::connect(&app, &state, "pets").await;
+    assert_eq!(client.tool_names().await.len(), 3);
+    sqlx::query("UPDATE plans SET max_tools_per_server = 2 WHERE code = 'free'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(client.tool_names().await, ["getPet", "createPet"]);
+}
+
+/// Only the oldest servers of the account serve MCP on a smaller plan.
+#[sqlx::test(migrations = "../../migrations")]
+async fn server_over_the_plan_limit_is_paused(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    import(&pool, "pets-two", UPSTREAM_SPEC, fake_upstream().await).await;
+    let first = Client::connect(&app, &state, "pets").await;
+    let second = Client::connect(&app, &state, "pets-two").await;
+    common::set_plan(&pool, octocat(&pool).await, "free").await;
+
+    assert_eq!(first.tool_names().await.len(), 3);
+    let message =
+        "this server is paused: the Free plan allows 1 server. Upgrade or delete a server.";
+    let list = second.request("tools/list", json!({})).await;
+    assert_eq!(list["error"]["message"], message);
+    assert_eq!(list["error"]["data"]["reason"], "server_paused");
+    let call = second.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(call["message"], message);
+    assert_eq!(saved_calls(&pool).await, 0);
+
+    // A delete of the older server lets the newer one serve again.
+    sqlx::query("DELETE FROM servers WHERE name = 'pets'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(second.tool_names().await.len(), 3);
+}
+
+/// The 100th call of the month passes. The 101st is refused and is not counted.
+#[sqlx::test(migrations = "../../migrations")]
+async fn monthly_quota_stops_at_the_limit(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let user = octocat(&pool).await;
+    common::set_plan(&pool, user, "free").await;
+    set_usage(&pool, user, &this_month(&pool).await, 99).await;
+    let client = Client::connect(&app, &state, "pets").await;
+
+    let result = client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(result["isError"], false);
+    assert_eq!(usage(&state, user).await, 100);
+
+    let refused = client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(refused["isError"], true);
+    let reset_day: String = sqlx::query_scalar(concat!(
+        "SELECT to_char((",
+        this_month!(),
+        " AT TIME ZONE 'UTC' + interval '1 month'), 'YYYY-MM-DD')"
+    ))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        text(&refused),
+        format!("monthly tool call limit reached (100 on the Free plan), resets on {reset_day}")
+    );
+    assert_eq!(usage(&state, user).await, 100);
+    assert_eq!(saved_calls(&pool).await, 1);
+}
+
+/// The count of last month does not stop calls in the new month.
+#[sqlx::test(migrations = "../../migrations")]
+async fn monthly_quota_resets_at_the_period_start(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let user = octocat(&pool).await;
+    common::set_plan(&pool, user, "free").await;
+    let last_month: String = sqlx::query_scalar(concat!(
+        "SELECT ((",
+        this_month!(),
+        " AT TIME ZONE 'UTC' - interval '1 month') AT TIME ZONE 'UTC')::text"
+    ))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    set_usage(&pool, user, &last_month, 100).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    let result = client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(result["isError"], false);
+    assert_eq!(usage(&state, user).await, 1);
+}
+
+/// A paid plan counts per billing period. An upgrade in the month starts a new count.
+#[sqlx::test(migrations = "../../migrations")]
+async fn paid_plan_counts_per_billing_period(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let user = octocat(&pool).await;
+    set_usage(&pool, user, &this_month(&pool).await, 100).await;
+    sqlx::query(
+        "UPDATE users SET current_period_start = date_trunc('second', now()) - interval '1 day',
+                          current_period_end = date_trunc('second', now()) + interval '29 days'
+         WHERE id = $1",
+    )
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE plans SET max_calls_per_month = 1 WHERE code = 'pro'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let client = Client::connect(&app, &state, "pets").await;
+    assert_eq!(
+        client.call("getPet", json!({ "id": "1" })).await["isError"],
+        false
+    );
+    let refused = client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(refused["isError"], true);
+    assert!(text(&refused).contains("(1 on the Pro plan)"), "{refused}");
+
+    // A period that ended without a webhook moves forward by one month, so the count resets.
+    sqlx::query(
+        "UPDATE users SET current_period_start = date_trunc('second', now()) - interval '40 days',
+                          current_period_end = date_trunc('second', now()) - interval '10 days'
+         WHERE id = $1",
+    )
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        client.call("getPet", json!({ "id": "1" })).await["isError"],
+        false
+    );
+}
+
+/// Calls that do not reach the upstream API do not use the quota.
+#[sqlx::test(migrations = "../../migrations")]
+async fn refused_calls_do_not_count(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let user = octocat(&pool).await;
+    common::set_plan(&pool, user, "free").await;
+    set_usage(&pool, user, &this_month(&pool).await, 99).await;
+    let client = Client::connect(&app, &state, "pets").await;
+
+    let unknown = client.call("nope", json!({})).await;
+    assert!(unknown["message"].is_string(), "{unknown}");
+    let missing_arg = client.call("getPet", json!({})).await;
+    assert!(missing_arg["message"].is_string(), "{missing_arg}");
+    assert_eq!(usage(&state, user).await, 99);
+
+    // The last place of the quota is still free.
+    let result = client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(result["isError"], false);
+    assert_eq!(usage(&state, user).await, 100);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn rate_limited_calls_do_not_count(pool: PgPool) {
+    // 12 calls per minute give a burst of 2 calls.
+    let (app, state) = setup_rate_limit(pool.clone(), 12).await;
+    let user = octocat(&pool).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    for _ in 0..2 {
+        let result = client.call("getPet", json!({ "id": "1" })).await;
+        assert_eq!(result["isError"], false);
+    }
+    let refused = client.call("getPet", json!({ "id": "1" })).await;
+    assert_eq!(refused["isError"], true);
+    assert_eq!(usage(&state, user).await, 2);
+}
+
+/// `plan_changed` is the function that the Stripe webhook calls after a plan change.
+#[sqlx::test(migrations = "../../migrations")]
+async fn plan_change_notifies_the_open_sessions(pool: PgPool) {
+    let (app, state) = setup(pool.clone(), 10_000).await;
+    let user = octocat(&pool).await;
+    let client = Client::connect(&app, &state, "pets").await;
+    client.tool_names().await;
+    let request = Request::get("/mcp/pets")
+        .header(header::HOST, HOST)
+        .header(header::ACCEPT, "text/event-stream")
+        .header(header::AUTHORIZATION, format!("Bearer {}", client.token))
+        .header(SESSION_HEADER, &client.session)
+        .body(Body::empty())
+        .unwrap();
+    let mut stream = app.clone().oneshot(request).await.unwrap().into_body();
+
+    common::set_plan(&pool, user, "free").await;
+    server::plan::plan_changed(&state, user).await.unwrap();
+    let mut seen = String::new();
+    while !seen.contains("notifications/tools/list_changed") {
+        let frame = tokio::time::timeout(Duration::from_secs(5), stream.frame())
+            .await
+            .expect("no event in 5 s")
+            .expect("stream ended")
+            .unwrap();
+        if let Some(data) = frame.data_ref() {
+            seen.push_str(&String::from_utf8_lossy(data));
+        }
+    }
 }

@@ -11,6 +11,10 @@ replaced: boolean, tools: Array<string>,
  */
 added: Array<string>, 
 /**
+ * New tools that start off, because the plan allows no more enabled tools.
+ */
+disabled: Array<string>, 
+/**
  * Unedited spec tools that the new spec changed.
  */
 changed: Array<string>, 

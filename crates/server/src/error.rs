@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::{
     auth::github::GithubError, import::ImportError, mcp::CallError, mcp_tokens::TokenError,
-    secrets::SecretsError, tools::DraftError,
+    plan::LimitError, secrets::SecretsError, tools::DraftError,
 };
 
 /// Errors that stop the server before or while it serves requests.
@@ -118,6 +118,8 @@ pub enum ApiError {
     LastEnabledTool,
     #[error("a test without a server needs a draft API")]
     TestNeedsDraft,
+    #[error("{0}")]
+    Plan(#[from] LimitError),
 }
 
 /// The JSON body of every API error. Clients match on `error`, not on `message`.
@@ -175,8 +177,10 @@ impl ApiError {
                 ImportError::Database(_) | ImportError::Hash(_) => {
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
+                ImportError::Plan(error) => limit_status(error),
                 _ => StatusCode::UNPROCESSABLE_ENTITY,
             },
+            Self::Plan(error) => limit_status(error),
             Self::Token(error) => match error {
                 TokenError::EmptyName
                 | TokenError::NameTooLong(_)
@@ -241,7 +245,9 @@ impl ApiError {
                 ImportError::ServerOwnedByOther(_) => "server_name_taken",
                 ImportError::ToolNameTaken(_) => "tool_name_taken",
                 ImportError::Database(_) | ImportError::Hash(_) => "internal_error",
+                ImportError::Plan(error) => limit_code(error),
             },
+            Self::Plan(error) => limit_code(error),
             Self::Token(error) => match error {
                 TokenError::EmptyName | TokenError::NameTooLong(_) => "invalid_token_name",
                 TokenError::InvalidLifetime(_) => "invalid_token_lifetime",
@@ -249,6 +255,20 @@ impl ApiError {
                 TokenError::Signing(_) | TokenError::Database(_) => "internal_error",
             },
         }
+    }
+}
+
+fn limit_status(error: &LimitError) -> StatusCode {
+    match error {
+        LimitError::Servers { .. } | LimitError::Tools { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+        LimitError::UnknownUser | LimitError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn limit_code(error: &LimitError) -> &'static str {
+    match error {
+        LimitError::Servers { .. } | LimitError::Tools { .. } => "plan_limit",
+        LimitError::UnknownUser | LimitError::Database(_) => "internal_error",
     }
 }
 

@@ -22,6 +22,7 @@ use ts_rs::TS;
 use crate::{
     auth::AuthUser,
     error::{ApiError, ApiJson},
+    plan,
     secrets::seal,
     servers::{ServerSummary, mcp_url, name_error, owned_server_id},
     state::AppState,
@@ -947,10 +948,11 @@ async fn insert_manual_tool(
     server_id: i64,
     api_id: i64,
     tool: &ToolDef,
+    enabled: bool,
 ) -> Result<(), ApiError> {
     sqlx::query(
-        "INSERT INTO tools (api_id, server_id, name, description, input_schema, request, source)
-         VALUES ($1, $2, $3, $4, $5, $6, 'manual')",
+        "INSERT INTO tools (api_id, server_id, name, description, input_schema, request, source, enabled)
+         VALUES ($1, $2, $3, $4, $5, $6, 'manual', $7)",
     )
     .bind(api_id)
     .bind(server_id)
@@ -958,6 +960,7 @@ async fn insert_manual_tool(
     .bind(&tool.description)
     .bind(Db(&tool.input_schema))
     .bind(Db(&tool.request))
+    .bind(enabled)
     .execute(&mut **tx)
     .await
     .map_err(tool_name_taken(&tool.name))?;
@@ -984,7 +987,9 @@ async fn create_tool(
     let tool = draft_to_tool(&body.draft)?;
     api_in_server(&state.pool, server_id, body.api_id).await?;
     let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
-    insert_manual_tool(&mut tx, server_id, body.api_id, &tool).await?;
+    // Over the plan limit, the new tool starts off, as a spec import does.
+    let enabled = plan::tool_room(&mut tx, server_id).await?.take();
+    insert_manual_tool(&mut tx, server_id, body.api_id, &tool, enabled).await?;
     tx.commit().await.map_err(ApiError::Database)?;
     state.peers.notify_tools_changed(server_id).await;
     let row = fetch_tool(&state.pool, server_id, &tool.name).await?;
@@ -1197,7 +1202,17 @@ async fn set_tool_enabled(
             .ok_or(ApiError::NotFound)?;
     // The lock keeps two requests from turning off the last two enabled tools together.
     let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
-    if !body.enabled {
+    if body.enabled {
+        let mut room = plan::tool_room(&mut tx, server_id).await?;
+        let on: bool = sqlx::query_scalar("SELECT enabled FROM tools WHERE id = $1")
+            .bind(tool_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(ApiError::Database)?;
+        if !on && !room.take() {
+            return Err(room.error().into());
+        }
+    } else {
         let enabled: Vec<i64> =
             sqlx::query_scalar("SELECT id FROM tools WHERE server_id = $1 AND enabled FOR UPDATE")
                 .bind(server_id)
@@ -1233,6 +1248,7 @@ async fn create_server_with_tool(
         return Err(ApiError::InvalidServerName);
     }
     let mut tx = state.pool.begin().await.map_err(ApiError::Database)?;
+    plan::check_server_limit(&mut tx, auth.user_id, 1).await?;
     let server_id: i64 =
         sqlx::query_scalar("INSERT INTO servers (user_id, name) VALUES ($1, $2) RETURNING id")
             .bind(auth.user_id)
@@ -1242,7 +1258,7 @@ async fn create_server_with_tool(
             .map_err(|error| name_error(error, server_name))?;
     let api_id = insert_manual_api(&state, &mut tx, server_id, &body.api).await?;
     let tool = draft_to_tool(&body.draft)?;
-    insert_manual_tool(&mut tx, server_id, api_id, &tool).await?;
+    insert_manual_tool(&mut tx, server_id, api_id, &tool, true).await?;
     tx.commit().await.map_err(ApiError::Database)?;
     state.peers.notify_tools_changed(server_id).await;
     let summary = ServerSummary {
@@ -1255,6 +1271,8 @@ async fn create_server_with_tool(
         active_tokens: 0,
         last_call_ms: None,
         connected_clients: 0,
+        paused: false,
+        paused_tools: 0,
     };
     Ok((StatusCode::CREATED, Json(summary)))
 }

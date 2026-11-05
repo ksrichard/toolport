@@ -44,8 +44,10 @@ struct App {
 }
 
 impl App {
+    /// The user is on Pro, because the tests use several servers and more tools than Free allows.
     async fn new(pool: PgPool, allow_local: bool) -> Self {
         let user = common::create_user(&pool, 1, "octocat").await;
+        common::set_plan(&pool, user, "pro").await;
         let mut config = common::config(&common::fake_github().await);
         config.allow_local_upstream = allow_local;
         let state = AppState::new(pool, &config).unwrap();

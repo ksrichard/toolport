@@ -53,11 +53,7 @@ async fn run(config: Config) -> Result<(), StartupError> {
         state.clone(),
         Duration::from_secs(config.spec_check_interval_secs),
     );
-    calls::spawn_cleanup(
-        state.pool.clone(),
-        config.call_retention_days,
-        CALL_CLEANUP_INTERVAL,
-    );
+    calls::spawn_cleanup(state.pool.clone(), CALL_CLEANUP_INTERVAL);
     axum::serve(listener, server::app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await

@@ -271,12 +271,21 @@ Each milestone ends with working code, tests, and a short demo.
     Status: part A (the plans and their limits, without Stripe) is done. The `plans` table holds
     each plan and its limits (NULL in a `max_*` column means no limit). The migration inserts Free
     and Pro. `users.plan_id` points to the plan, and a trigger gives new users the default plan.
-    The server reads the plan with each request and has no cache, so a change in the table
-    applies at once. Code: `crates/server/src/plan.rs`, `billing.rs`.
+    The server reads the plan with each request and has no cache, so a change of the server,
+    call, or history limit applies at once. Code: `crates/server/src/plan.rs`, `billing.rs`.
     Rules: a new server over the limit gives 422 `plan_limit`. Only the oldest servers serve MCP;
     a newer one answers `tools/list` and `tools/call` with a JSON-RPC error "this server is
-    paused: ...". Only the first enabled tools by id are served; turning on one more gives 422
-    `plan_limit`, and an import or a new manual tool over the limit starts off. The monthly quota
+    paused: ...". The tool pause is stored: `tools.plan_paused`, and a paused tool is off. When
+    the tool limit goes down (`plan::reconcile_tools`), the enabled tools after the first N by id
+    on each server become paused. When it goes up, the paused tools turn on again by id, up to
+    the new limit. `users.tool_limit_applied` holds the limit of the last reconcile. The webhook
+    runs the reconcile after a plan change. A manual edit of `plans` sends no webhook, so the
+    hourly job (`plan::spawn_reconcile`) applies it; until then the old tool set stays. A user who
+    turns off a served tool keeps the free place: no paused tool comes back by itself. Turning on
+    a paused or off tool needs a free place, else 422 `plan_limit`, and it clears the pause. An
+    import or a new manual tool over the limit starts paused. A tool test
+    (`POST /api/servers/{name}/tool-test`) on a paused server or of a paused tool gives 422
+    `plan_limit`; a test of an unsaved tool is allowed. The monthly quota
     is the `usage` table: one atomic upsert reserves each call after the rate limits, and a call
     that fails before the upstream request gives its place back. The default plan counts per
     UTC month; a paid plan counts per Stripe billing period (`users.current_period_start/end`).

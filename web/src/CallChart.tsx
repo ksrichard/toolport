@@ -3,17 +3,18 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { getCallSeries } from './api'
+import { historyText, usePlan, usePlans } from './plans'
 import { BUCKET_MS, CHART_BUCKETS, type LiveState } from './liveStream'
 import type { SeriesWindow } from './types/SeriesWindow'
 
 export type ChartWindow = '5m' | SeriesWindow
 
-const WINDOWS: { id: ChartWindow; label: string; bucket: string }[] = [
-  { id: '5m', label: '5 min', bucket: '5 s' },
-  { id: '1h', label: '1 h', bucket: '1 min' },
-  { id: '24h', label: '24 h', bucket: '15 min' },
-  { id: '7d', label: '7 d', bucket: '1 h' },
-  { id: '30d', label: '30 d', bucket: '6 h' },
+const WINDOWS: { id: ChartWindow; label: string; bucket: string; hours: number }[] = [
+  { id: '5m', label: '5 min', bucket: '5 s', hours: 0 },
+  { id: '1h', label: '1 h', bucket: '1 min', hours: 1 },
+  { id: '24h', label: '24 h', bucket: '15 min', hours: 24 },
+  { id: '7d', label: '7 d', bucket: '1 h', hours: 7 * 24 },
+  { id: '30d', label: '30 d', bucket: '6 h', hours: 30 * 24 },
 ]
 
 /** A long window refreshes on this timer, and also soon after new calls. */
@@ -136,7 +137,15 @@ interface CallsPanelProps {
 }
 
 export function CallsPanel({ server, live, now, paused }: CallsPanelProps) {
-  const [window, setWindow] = useState<ChartWindow>(loadWindow)
+  const [chosen, setWindow] = useState<ChartWindow>(loadWindow)
+  const { billing } = usePlan()
+  const { plans } = usePlans()
+  // A window longer than the call history of the plan would show only empty buckets.
+  const history = billing?.plan.history_hours ?? null
+  const tooLong = (hours: number) => history !== null && hours > history
+  const longest = plans?.length ? plans.reduce((a, b) => (b.history_hours > a.history_hours ? b : a)) : null
+  const tooLongHint = longest ? `${longest.name} keeps ${historyText(longest.history_hours)} of calls` : undefined
+  const window = tooLong(WINDOWS.find((w) => w.id === chosen)?.hours ?? 0) ? '5m' : chosen
   const long = useLongSeries(server, window, paused, live.calls[0]?.id)
   const info = WINDOWS.find((w) => w.id === window) ?? WINDOWS[0]
   const series = window === '5m' ? liveSeries(live.buckets, now) : long.series
@@ -163,7 +172,15 @@ export function CallsPanel({ server, live, now, paused }: CallsPanelProps) {
           </small>
           <span className="skins seg" role="group" aria-label="Time window">
             {WINDOWS.map((w) => (
-              <button key={w.id} type="button" aria-pressed={w.id === window} onClick={() => choose(w.id)}>
+              <button
+                key={w.id}
+                type="button"
+                aria-pressed={w.id === window}
+                // aria-disabled and not disabled, because browsers hide the title of a disabled button.
+                aria-disabled={tooLong(w.hours) || undefined}
+                title={tooLong(w.hours) ? tooLongHint : undefined}
+                onClick={() => !tooLong(w.hours) && choose(w.id)}
+              >
                 {w.label}
               </button>
             ))}

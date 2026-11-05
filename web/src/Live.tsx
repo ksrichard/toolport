@@ -10,6 +10,8 @@ import type { CallResult } from './types/CallResult'
 import type { ServerSummary } from './types/ServerSummary'
 import { ToolSwitch } from './ToolSwitch'
 import { useToolList } from './toolList'
+import { PausedPill } from './Tools'
+import { usePlan } from './plans'
 
 const STATUS_TEXT: Record<StreamStatus, string> = {
   connecting: 'Connecting',
@@ -127,12 +129,17 @@ export function Live({ server, onConnectClient, onOpenTool, onToolsChanged }: Li
 
 function Kpis({ live }: { live: LiveState }) {
   const m = live.metrics
+  const { billing } = usePlan()
+  const max = billing?.plan.max_calls_per_month
   return (
     <section className="panel kpis" aria-label="Metrics">
       <div className="kpi">
         <div className="label">Calls per minute</div>
         <div className="value">{m?.calls_per_minute ?? 0}</div>
-        <div className="delta">last 60 s</div>
+        <div className="delta">
+          last 60 s
+          {billing && max != null && ` · this month ${billing.calls_used} / ${max}`}
+        </div>
       </div>
       <div className="kpi">
         <div className="label">Error rate</div>
@@ -406,6 +413,7 @@ function Tools({
                 </a>
                 {t.source === 'manual' && <span className="method">manual</span>}
                 {t.edited && <span className="method">edited</span>}
+                {t.paused && <PausedPill />}
               </div>
               <div>
                 <span className="method">{t.method}</span> {t.path}

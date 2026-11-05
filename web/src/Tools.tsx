@@ -5,6 +5,7 @@ import { ToolSwitch } from './ToolSwitch'
 import { useToolList, type ToolList } from './toolList'
 import type { ToolSummary } from './types/ToolSummary'
 import { PixelScenes } from './PixelScenes'
+import { usePlan } from './plans'
 
 interface ToolsProps {
   server: string
@@ -19,8 +20,14 @@ function tag(tool: ToolSummary): string {
 
 export function Tools({ server, navigate, onChanged }: ToolsProps) {
   const list = useToolList(server, onChanged)
+  const { billing } = usePlan()
   const tools = list.tools ?? []
   const on = tools.filter((t) => t.enabled).length
+  const max = billing?.plan.max_tools_per_server ?? null
+  const summary =
+    billing && max !== null
+      ? `${on} of ${max} tools on (${billing.plan.name}). ${tools.length} tools in total. `
+      : `${on} of ${tools.length} on. `
   const toolUrl = (tool: string) => `/servers/${encodeURIComponent(server)}/tools/${encodeURIComponent(tool)}`
 
   const groups = new Map<string, ToolSummary[]>()
@@ -34,7 +41,7 @@ export function Tools({ server, navigate, onChanged }: ToolsProps) {
         <div>
           <h1>Tools</h1>
           <div className="sub">
-            {list.tools ? `${on} of ${tools.length} on. ` : ''}AI clients do not see tools that are off.
+            {list.tools ? summary : ''}AI clients do not see tools that are off.
           </div>
         </div>
         <PixelScenes />
@@ -103,6 +110,7 @@ function ToolRow({ tool, list, href, navigate }: ToolRowProps) {
           <span className="mono">{tool.name}</span>
           <span className="method">{tag(tool)}</span>
           {tool.spec_changed && <span className="pill warn">spec changed</span>}
+          {tool.paused && <PausedPill />}
         </div>
         <div className="mono muted tool-path">
           {tool.method} {tool.path}
@@ -125,5 +133,14 @@ function ToolRow({ tool, list, href, navigate }: ToolRowProps) {
         Edit
       </a>
     </li>
+  )
+}
+
+/** A tool that is on, but over the plan limit. MCP clients do not see it. */
+export function PausedPill() {
+  return (
+    <span className="pill warn" title="This tool is on, but over the plan limit. AI clients do not see it.">
+      Paused (plan)
+    </span>
   )
 }

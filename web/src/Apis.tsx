@@ -336,6 +336,7 @@ function ImportReport({ title, apis, onClose }: ImportReportProps) {
               {title} of {api.name} <small>{api.tools.length} spec tools now</small>
             </h2>
             <Names label="added" names={api.added} />
+            {api.disabled.length > 0 && <Names label="added off (plan limit)" names={api.disabled} />}
             <Names label="updated" names={api.changed} />
             <Names label="kept (edited)" names={api.kept} />
             <Names label="removed" names={api.removed} />

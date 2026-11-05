@@ -88,7 +88,9 @@ export function Billing() {
   }
 
   const configured = billing?.billing_configured ?? false
-  const subscribed = billing?.subscription_status != null
+  // A canceled subscription is over. The user can then start a new one with Checkout.
+  const status = billing?.subscription_status
+  const subscribed = status != null && status !== 'canceled' && status !== 'incomplete_expired'
 
   const action = (plan: Plan) => {
     if (!billing) return null

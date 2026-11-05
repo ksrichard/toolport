@@ -58,9 +58,100 @@ interface LiveProps {
   /** Opens the builder. Null opens it for a new tool. */
   onOpenTool: (tool: string | null) => void
   onToolsChanged?: () => void
+  /** Opens a page of the app, for example /billing. */
+  navigate: (path: string) => void
 }
 
-export function Live({ server, onConnectClient, onOpenTool, onToolsChanged }: LiveProps) {
+export function Live(props: LiveProps) {
+  return props.server.paused ? <PausedLive server={props.server} navigate={props.navigate} /> : <ActiveLive {...props} />
+}
+
+const EMPTY_LIVE: LiveState = {
+  status: 'paused',
+  error: null,
+  metrics: null,
+  clients: [],
+  buckets: new Map(),
+  calls: [],
+  fresh: new Set(),
+  firstRequests: [],
+}
+
+/**
+ * A paused server does not serve MCP requests, so the page opens no live stream. It shows the
+ * page layout without data and links to the pages that can end the pause.
+ */
+function PausedLive({ server, navigate }: { server: ServerSummary; navigate: (path: string) => void }) {
+  const { billing } = usePlan()
+  const plan = billing?.plan
+  const limit = plan?.max_servers
+  const reason =
+    plan && limit != null
+      ? `The ${plan.name} plan allows ${limit === 1 ? '1 server' : `${limit} servers`}, and this server is over the limit.`
+      : 'This server is over the plan limit.'
+  return (
+    <>
+      <div className="head">
+        <div>
+          <h1>{server.name}</h1>
+          <div className="sub">
+            <span className="stream paused">
+              <span className="dot" />
+              Server paused
+            </span>
+          </div>
+        </div>
+        <div className="head-actions">
+          <div className="endpoint is-disabled">
+            <code>{server.mcp_url}</code>
+          </div>
+        </div>
+      </div>
+
+      <section className="panel callout" role="status">
+        <div>
+          <h2>This server is paused</h2>
+          <p className="muted">
+            {reason} MCP clients get an error, and ToolPort does not monitor the server. Upgrade your plan, or delete
+            another server to start this one again.
+          </p>
+        </div>
+        <div className="row-actions">
+          <button className="btn primary" type="button" onClick={() => navigate('/billing')}>
+            Go to Plan &amp; billing
+          </button>
+          <button className="btn" type="button" onClick={() => navigate('/servers')}>
+            Manage servers
+          </button>
+        </div>
+      </section>
+
+      <div className="paused-view" inert aria-hidden="true">
+        <Kpis live={EMPTY_LIVE} />
+        <div className="grid2">
+          <div className="col">
+            <section className="panel">
+              <h2>Calls over time</h2>
+              <p className="muted">No monitoring while the server is paused.</p>
+            </section>
+            <section className="panel">
+              <h2>Call log</h2>
+              <p className="muted">No monitoring while the server is paused.</p>
+            </section>
+          </div>
+          <div className="col">
+            <section className="panel">
+              <h2>Connected clients</h2>
+              <p className="muted">No client can connect while the server is paused.</p>
+            </section>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function ActiveLive({ server, onConnectClient, onOpenTool, onToolsChanged }: LiveProps) {
   const [paused, setPaused] = useState(false)
   const live = useLiveStream(server.name, paused)
   const now = useNow(BUCKET_MS)

@@ -32,8 +32,6 @@ const STEPS = [
   { title: 'Watch', text: 'See each tool call, its status, and its latency on the live dashboard.' },
 ]
 
-const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five']
-
 export function Landing() {
   const [error] = useState(takeLoginError)
   const { plans, error: plansError } = usePlans()
@@ -82,7 +80,7 @@ export function Landing() {
         <section aria-labelledby="pricing-title">
           <p className="eyebrow">// Plans</p>
           <h2 id="pricing-title" className="site-title">
-            {plans ? `${NUMBER_WORDS[plans.length] ?? plans.length} plans` : 'Plans'}, enforced in Rust
+            Start free. Upgrade when you need more.
           </h2>
           {plansError && (
             <p className="alert" role="alert">

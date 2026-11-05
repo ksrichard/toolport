@@ -8,8 +8,10 @@ import { BUCKET_MS, MAX_CALLS, useLiveStream, type LiveState, type StreamStatus 
 import type { CallRecord } from './types/CallRecord'
 import type { CallResult } from './types/CallResult'
 import type { ServerSummary } from './types/ServerSummary'
+import type { ToolSummary } from './types/ToolSummary'
+import { usePlanBlocked } from './planLock'
 import { ToolSwitch } from './ToolSwitch'
-import { useToolList } from './toolList'
+import { useToolList, type ToolList } from './toolList'
 import { PausedPill } from './Tools'
 import { usePlan } from './plans'
 
@@ -490,30 +492,44 @@ function Tools({
       )}
       <ul className="list" ref={listRef}>
         {list.tools?.map((t) => (
-          <li key={t.name} className={t.paused ? 'tool is-paused' : 'tool'}>
-            <div className="t">
-              <div>
-                <a
-                  href={`/servers/${encodeURIComponent(server)}/tools/${encodeURIComponent(t.name)}`}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    onOpenTool(t.name)
-                  }}
-                >
-                  {t.name}
-                </a>
-                {t.source === 'manual' && <span className="method">manual</span>}
-                {t.edited && <span className="method">edited</span>}
-                {t.paused && <PausedPill />}
-              </div>
-              <div>
-                <span className="method">{t.method}</span> {t.path}
-              </div>
-            </div>
-            <ToolSwitch tool={t} list={list} />
-          </li>
+          <LiveToolRow key={t.name} tool={t} list={list} server={server} onOpenTool={onOpenTool} />
         ))}
       </ul>
     </section>
+  )
+}
+
+interface LiveToolRowProps {
+  tool: ToolSummary
+  list: ToolList
+  server: string
+  onOpenTool: (tool: string | null) => void
+}
+
+function LiveToolRow({ tool: t, list, server, onOpenTool }: LiveToolRowProps) {
+  const blocked = usePlanBlocked(t, list)
+  return (
+    <li className={blocked ? 'tool is-paused' : 'tool'}>
+      <div className="t">
+        <div>
+          <a
+            href={`/servers/${encodeURIComponent(server)}/tools/${encodeURIComponent(t.name)}`}
+            onClick={(e) => {
+              e.preventDefault()
+              onOpenTool(t.name)
+            }}
+          >
+            {t.name}
+          </a>
+          {t.source === 'manual' && <span className="method">manual</span>}
+          {t.edited && <span className="method">edited</span>}
+          {blocked && <PausedPill />}
+        </div>
+        <div>
+          <span className="method">{t.method}</span> {t.path}
+        </div>
+      </div>
+      <ToolSwitch tool={t} list={list} />
+    </li>
   )
 }

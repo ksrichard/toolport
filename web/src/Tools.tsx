@@ -1,6 +1,7 @@
 // Tools page: every tool of the server, grouped by API, with on/off switches.
 
 import { useListAnimation } from './motion'
+import { usePlanBlocked } from './planLock'
 import { ToolSwitch } from './ToolSwitch'
 import { useToolList, type ToolList } from './toolList'
 import type { ToolSummary } from './types/ToolSummary'
@@ -102,15 +103,16 @@ interface ToolRowProps {
 }
 
 function ToolRow({ tool, list, href, navigate }: ToolRowProps) {
+  const blocked = usePlanBlocked(tool, list)
   return (
-    <li className={tool.paused ? 'is-paused' : undefined}>
+    <li className={blocked ? 'is-paused' : undefined}>
       <ToolSwitch tool={tool} list={list} />
       <div className="t">
         <div className="tool-name">
           <span className="mono">{tool.name}</span>
           <span className="method">{tag(tool)}</span>
           {tool.spec_changed && <span className="pill warn">spec changed</span>}
-          {tool.paused && <PausedPill />}
+          {blocked && <PausedPill />}
         </div>
         <div className="mono muted tool-path">
           {tool.method} {tool.path}

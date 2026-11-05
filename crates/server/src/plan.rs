@@ -160,6 +160,10 @@ pub enum LimitError {
         "the {plan} plan allows {max} enabled tools per server, turn off another tool or upgrade your plan"
     )]
     Tools { plan: String, max: i64 },
+    #[error("{0}")]
+    PausedServer(String),
+    #[error("{0}")]
+    PausedTool(String),
     #[error("the user does not exist")]
     UnknownUser,
     #[error("the database query failed")]
@@ -305,6 +309,27 @@ pub async fn server_is_served(
     .fetch_one(pool)
     .await?;
     Ok(older < max)
+}
+
+/// True when the tool is on but over the tool limit of the plan. Only the first enabled
+/// tools by id are served. `LIMIT NULL` means no limit.
+pub async fn tool_is_paused(
+    pool: &PgPool,
+    server_id: i64,
+    tool_id: i64,
+    plan: &Plan,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT t.enabled AND t.id NOT IN (SELECT id FROM tools WHERE server_id = $1 AND enabled
+                                          ORDER BY id LIMIT $3)
+         FROM tools t WHERE t.server_id = $1 AND t.id = $2",
+    )
+    .bind(server_id)
+    .bind(tool_id)
+    .bind(plan.max_tools_per_server.map(i64::from))
+    .fetch_optional(pool)
+    .await
+    .map(|paused| paused.unwrap_or(false))
 }
 
 /// Takes one call from the monthly quota with one atomic statement. Returns false when the

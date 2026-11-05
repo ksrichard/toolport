@@ -704,7 +704,51 @@ async fn test_tool(
     ApiJson(body): ApiJson<TestRequest>,
 ) -> Result<Json<TestResult>, ApiError> {
     let server_id = owned_server_id(&state.pool, auth.user_id, &name).await?;
+    check_test_plan(&state, auth.user_id, server_id, &body).await?;
     run_test(&state, Some(server_id), body).await.map(Json)
+}
+
+/// A test sends a real upstream request, so it follows the same plan rules as an MCP call:
+/// no test on a paused server, and no test of a stored tool that the plan pauses. A test of
+/// a new, unsaved tool is allowed on a served server.
+async fn check_test_plan(
+    state: &AppState,
+    user_id: i64,
+    server_id: i64,
+    body: &TestRequest,
+) -> Result<(), ApiError> {
+    let account = plan::account_plan(&state.pool, user_id)
+        .await
+        .map_err(ApiError::Database)?
+        .ok_or(ApiError::Unauthorized)?;
+    let served = plan::server_is_served(&state.pool, server_id, &account.plan)
+        .await
+        .map_err(ApiError::Database)?;
+    if !served {
+        let message = plan::paused_server_message(&account.plan);
+        return Err(plan::LimitError::PausedServer(message).into());
+    }
+    let Some(name) = body.spec_tool.as_deref().or(body.manual_tool.as_deref()) else {
+        return Ok(());
+    };
+    let tool_id: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM tools WHERE server_id = $1 AND name = $2")
+            .bind(server_id)
+            .bind(name)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(ApiError::Database)?;
+    let Some(tool_id) = tool_id else {
+        return Ok(());
+    };
+    let paused = plan::tool_is_paused(&state.pool, server_id, tool_id, &account.plan)
+        .await
+        .map_err(ApiError::Database)?;
+    if paused {
+        let message = plan::paused_tool_message(&account.plan, name);
+        return Err(plan::LimitError::PausedTool(message).into());
+    }
+    Ok(())
 }
 
 /// The test for a user without a server yet (the onboarding wizard). The API must be a draft,

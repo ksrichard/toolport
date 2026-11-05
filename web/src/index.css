@@ -132,7 +132,6 @@ main { display: grid; gap: 16px; align-content: start; min-width: 0; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .paused-view { opacity: .45; filter: grayscale(1); pointer-events: none; user-select: none; }
 .endpoint.is-disabled { opacity: .5; }
-/* The switch stays usable: a user turns off a served tool to serve a paused one. */
 li.is-paused .t { opacity: .5; }
 .endpoint.is-disabled code { text-decoration: line-through; }
 
@@ -241,6 +240,7 @@ td.form-cell { white-space: normal; background: var(--panel-2); }
 .toggle input:checked + span { background: var(--accent); border-color: var(--accent); }
 .toggle input:checked + span::after { transform: translateX(14px); background: var(--accent-ink); }
 .toggle input:disabled + span { opacity: .6; }
+.toggle.is-locked { cursor: not-allowed; }
 :root[data-theme="neon"] .toggle span, :root[data-theme="neon"] .toggle span::after { border-radius: 0; }
 .note { font-size: 12px; color: var(--muted); margin: 0; }
 .rule-note { margin-top: 12px; }

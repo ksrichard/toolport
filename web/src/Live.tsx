@@ -312,12 +312,27 @@ function CallLog({ server, live }: { server: string; live: LiveState }) {
       )}
       {(page > 1 || hasMore) && (
         <div className="pager">
-          <button className="btn" type="button" onClick={newer} disabled={page === 1 || busy}>
-            Newer
+          <button
+            className="btn arrow"
+            type="button"
+            onClick={newer}
+            disabled={page === 1 || busy}
+            aria-label="Newer calls"
+            title="Newer calls"
+          >
+            ←
           </button>
           <span className="muted">{range}</span>
-          <button className="btn" type="button" onClick={loadOlder} disabled={!hasMore || busy || shown.length === 0}>
-            {busy ? 'Loading…' : 'Older'}
+          <button
+            className="btn arrow"
+            type="button"
+            onClick={loadOlder}
+            disabled={!hasMore || busy || shown.length === 0}
+            aria-label="Older calls"
+            aria-busy={busy}
+            title="Older calls"
+          >
+            →
           </button>
         </div>
       )}

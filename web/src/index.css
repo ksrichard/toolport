@@ -154,6 +154,8 @@ main { display: grid; gap: 16px; align-content: start; min-width: 0; }
 .new-calls { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; font-size: 12px; }
 .pager .muted { font-family: var(--f-data); font-variant-numeric: tabular-nums; }
+.pager .arrow { min-width: 36px; font-size: 16px; line-height: 1; padding-inline: 10px; }
+.pager .arrow[aria-busy="true"] { cursor: progress; opacity: .6; }
 
 .chart-box { position: relative; touch-action: pan-y; cursor: crosshair; border-radius: var(--radius-sm); }
 .chart-box:focus { outline: none; }

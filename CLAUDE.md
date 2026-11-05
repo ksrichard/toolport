@@ -26,6 +26,9 @@ use the same shell, panels, and tokens.
   loopback, link-local, and other non-public addresses. This covers DNS answers, IP-literal URLs,
   and redirects. It ignores `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` on purpose, because a
   proxy would skip the address check.
+- Payments: `async-stripe` 1.0.0-rc.10 (pinned with `=`, owner approved) and its sub-crates
+  (`async-stripe-billing`, `-checkout`, `-core`, `-product`, `-webhook`). They give typed Stripe
+  requests and the webhook signature check. Only the needed features are on, with rustls and no OpenSSL.
 - Upstream secrets at rest: `aes-gcm` (AES-256-GCM) encrypts them. `zeroize` wipes decrypted
   secrets from memory.
 - Database: PostgreSQL through `sqlx` with migrations. Local dev runs Postgres in Docker Compose.
@@ -91,6 +94,8 @@ Services in `compose.yaml`:
   migrations at startup. It listens on port 8080 inside the Docker network only.
 - `caddy`: the HTTP proxy and the only service with public ports (80 and 443).
   It serves the built React app and sends API traffic to `server`.
+- `stripe-cli`: only with `--profile stripe`, for local payment tests. It runs `stripe listen`
+  and sends the Stripe test events to `http://server:8080/api/billing/webhook`. No public port.
 
 Images:
 - `docker/server.Dockerfile`: a multi-stage build. Stage 1 uses `rust:1-bookworm` and
@@ -109,7 +114,10 @@ Caddy routes (`docker/Caddyfile`):
 
 Config:
 - All secrets come from `.env` (not committed): `DATABASE_URL`, `JWT_SECRET`,
-  `SECRETS_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOOLPORT_DOMAIN`, `POSTGRES_PASSWORD`, `PUBLIC_URL`.
+  `SECRETS_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOOLPORT_DOMAIN`, `POSTGRES_PASSWORD`, `PUBLIC_URL`,
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+- Payments are on only when both `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are set.
+  Without them the billing routes give 503 `billing_not_configured`, and the plan limits still apply.
 - Compose sets the server's `PUBLIC_URL` to `https://$TOOLPORT_DOMAIN`. The `PUBLIC_URL` in
   `.env` is for host runs only.
 - `ALLOW_LOCAL_UPSTREAM` (default false) allows upstream calls to loopback addresses only. Use it
@@ -275,15 +283,50 @@ Each milestone ends with working code, tests, and a short demo.
     A refused call gets a tool error "monthly tool call limit reached (100 on the Free plan),
     resets on 2026-12-01". `plan::plan_changed` sends `list_changed` to all sessions of a user.
     `GET /api/plans` is public. `GET /api/billing` returns the plan, usage, and subscription;
-    `billing_configured` is false until part B. The dashboard has the "Plan & billing" page, the
-    plan badge, the shell banner, and the Paused marks. The Upgrade and Manage buttons stay
-    off with "Payments are not set up yet". Part B (Stripe Checkout, Portal, webhook) is not done.
+    `billing_configured` is true when the Stripe settings are present. The dashboard has the
+    "Plan & billing" page, the plan badge, the shell banner, and the Paused marks.
+    Part B (Stripe) is done. Code: `crates/server/src/payments.rs` (Stripe client) and `billing.rs`.
+    Stripe manages the subscriptions. ToolPort makes no Stripe call that changes a subscription.
+    `POST /api/billing/checkout {plan}` starts a Checkout only for a user without a live
+    subscription (else 409 `already_subscribed`). `POST /api/billing/portal` opens the Customer
+    Portal for all other changes (409 `no_customer` without a Stripe customer).
+    `POST /api/billing/webhook` has no login. It checks the `Stripe-Signature` header on the raw
+    body (400 for a bad or old signature), records each event id in `stripe_events` (a repeated
+    event changes nothing), and reads the current subscription from Stripe, so the event order
+    does not matter. The price lookup key sets `plan_id` while the status is `active`, `trialing`,
+    or `past_due`; any other status, or an unknown lookup key, gives the default plan. A plan
+    change calls `plan::plan_changed`. Unknown events give 200. Tests use a fake Stripe API
+    (`tests/common/mod.rs`). See "Payments (test mode)".
+
+## Payments (test mode)
+Use a Stripe test key only (`sk_test_...` or `rk_test_...`). The scripts refuse live keys and
+never print the key or the webhook secret. Run the steps from the repo root.
+1. Put the test key in `.env`: `STRIPE_SECRET_KEY=sk_test_...` (from
+   https://dashboard.stripe.com/test/apikeys).
+2. `scripts/stripe-setup.sh`. It creates or finds the product `toolport_pro`, the $9/month USD
+   price with the lookup key `toolport_pro_monthly`, and the Customer Portal configuration
+   (cancel at period end, payment method, invoices, billing address). It is safe to run twice.
+   For other paid plans, pass `code:lookup_key:amount_cents:currency:interval` arguments.
+3. `scripts/stripe-webhook-secret.sh`. It writes the `stripe listen` signing secret into `.env`
+   as `STRIPE_WEBHOOK_SECRET`. The secret stays the same for the same key, so run it once.
+4. `docker compose --profile stripe up --build`, then open `https://localhost` and sign in.
+5. On "Plan & billing", click "Upgrade to Pro". Pay with the test card 4242 4242 4242 4242,
+   any future date, and any CVC. Stripe sends you back to `/billing?checkout=success`, and the
+   page shows Pro after the webhook arrives.
+6. Click "Manage billing". Cancel in the Portal. The page shows "Cancels on <date>", and the
+   plan stays Pro until the period ends.
+7. Replays, from a second terminal:
+   `docker compose --profile stripe run --rm stripe-cli trigger customer.subscription.updated`
+   and `docker compose --profile stripe run --rm stripe-cli events resend <evt_id>`.
+   `docker compose logs -f stripe-cli server` shows the deliveries and the results.
+For a host run (`cargo run -p server`), send the events to the host instead:
+`docker compose --profile stripe run --rm stripe-cli listen --forward-to http://host.docker.internal:8080/api/billing/webhook`.
 
 ## Rules for work in this repo
 - Write all text (docs, comments, PRs, commits) in simple technical English.
   One idea per sentence. Active voice. No metaphors.
 - Keep comments few. Explain why, not what.
-- Only mock external systems in tests (the upstream APIs and GitHub). Use a real Postgres DB
+- Only mock external systems in tests (the upstream APIs, GitHub, and Stripe). Use a real Postgres DB
   in tests (`#[sqlx::test]`).
 - Never store or log secrets in plain text. Never print token values after creation.
 - Do not add dummy or seed data unless asked.

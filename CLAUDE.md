@@ -120,7 +120,7 @@ Config:
   0 turns the limit off.
 - `USER_RATE_LIMIT_PER_MINUTE` (default 300) is the number of tool calls per minute for all MCP
   tokens of one user together, on all servers of the user. 0 turns the limit off.
-- `CALL_RETENTION_DAYS` (default 30) is the number of days to keep call rows. 0 keeps all rows.
+- The plan of the owner sets how long call rows stay (`plans.history_hours`). No env var sets it.
 - `.env.example` lists every variable. CI checks that the Compose file is valid
   (`docker compose config`).
 
@@ -249,15 +249,35 @@ Each milestone ends with working code, tests, and a short demo.
     exceeded for this token, retry in N s" or "... for this account ...". It does not reach the
     upstream API and is not saved in the call log. The number of tokens has no cap. The
     buckets live in memory, so each server process has its own limits. An hourly job
-    (`calls::delete_old_calls`) deletes old call rows in batches of 5000. After the cleanup, a
+    (`calls::delete_old_calls`) deletes the call rows that are older than the history of the
+    owner's plan, in batches of 5000. After the cleanup, a
     server with only old calls shows "never" as its last call on the All servers page.
     `GET /api/limits` returns `rate_limit_per_minute`, `rate_limit_burst`,
     `user_rate_limit_per_minute`, and `user_rate_limit_burst` (0 when that limit is off). The
     limiter computes the values, so they cannot differ from the real limits. The Tokens page
     shows the rules under the token table. The Connect step of onboarding adds
-    one short sentence. The UI does not show the call retention.
+    one short sentence.
 13. Deploy. Run the same `compose.yaml` on one host with a real `TOOLPORT_DOMAIN`.
     Add a Postgres backup job. Ask before any change to real infrastructure.
+14. Plans and billing. Free and Pro plans per account, paid with Stripe.
+    Status: part A (the plans and their limits, without Stripe) is done. The `plans` table holds
+    each plan and its limits (NULL in a `max_*` column means no limit). The migration inserts Free
+    and Pro. `users.plan_id` points to the plan, and a trigger gives new users the default plan.
+    The server reads the plan with each request and has no cache, so a change in the table
+    applies at once. Code: `crates/server/src/plan.rs`, `billing.rs`.
+    Rules: a new server over the limit gives 422 `plan_limit`. Only the oldest servers serve MCP;
+    a newer one answers `tools/list` and `tools/call` with a JSON-RPC error "this server is
+    paused: ...". Only the first enabled tools by id are served; turning on one more gives 422
+    `plan_limit`, and an import or a new manual tool over the limit starts off. The monthly quota
+    is the `usage` table: one atomic upsert reserves each call after the rate limits, and a call
+    that fails before the upstream request gives its place back. The default plan counts per
+    UTC month; a paid plan counts per Stripe billing period (`users.current_period_start/end`).
+    A refused call gets a tool error "monthly tool call limit reached (100 on the Free plan),
+    resets on 2026-12-01". `plan::plan_changed` sends `list_changed` to all sessions of a user.
+    `GET /api/plans` is public. `GET /api/billing` returns the plan, usage, and subscription;
+    `billing_configured` is false until part B. The dashboard has the "Plan & billing" page, the
+    plan badge, the shell banner, and the Paused marks. The Upgrade and Manage buttons stay
+    off with "Payments are not set up yet". Part B (Stripe Checkout, Portal, webhook) is not done.
 
 ## Rules for work in this repo
 - Write all text (docs, comments, PRs, commits) in simple technical English.

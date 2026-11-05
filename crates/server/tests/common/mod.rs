@@ -122,7 +122,7 @@ pub async fn create_user(pool: &PgPool, github_id: i64, login: &str) -> i64 {
         .unwrap()
 }
 
-/// Moves a user to the plan with this code, as the Stripe webhook does.
+/// Moves a user to the plan with this code and applies its tool limit, as the Stripe webhook does.
 /// Tests that need several servers or many tools use `pro`.
 pub async fn set_plan(pool: &PgPool, user_id: i64, code: &str) {
     let updated = sqlx::query(
@@ -134,6 +134,11 @@ pub async fn set_plan(pool: &PgPool, user_id: i64, code: &str) {
     .await
     .unwrap();
     assert_eq!(updated.rows_affected(), 1);
+    let mut tx = pool.begin().await.unwrap();
+    server::plan::reconcile_tools(&mut tx, user_id)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 }
 
 pub const STRIPE_KEY: &str = "fake-stripe-key";

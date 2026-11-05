@@ -1987,7 +1987,11 @@ async fn test_route_refuses_a_paused_tool(pool: PgPool) {
     import_petstore_at(&app, &fake_petstore().await).await;
     common::set_plan(&pool, app.user, "free").await;
 
-    let paused = enabled_tool_at(&app, 3).await;
+    let paused: String =
+        sqlx::query_scalar("SELECT name FROM tools WHERE plan_paused ORDER BY id LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let (status, error) = test_stored_tool(&app, &paused).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(error["error"], "plan_limit");

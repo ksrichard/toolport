@@ -154,14 +154,16 @@ async fn import_on_free_turns_on_only_the_allowed_tools(pool: PgPool) {
     );
 }
 
-/// Tools that are on stay on. Only the new tools of the import start off.
+/// A downgrade pauses the tools after the first 3. A new tool and a re-import keep the
+/// served tools, and new tools start paused.
 #[sqlx::test(migrations = "../../migrations")]
-async fn import_on_free_keeps_the_enabled_tools(pool: PgPool) {
+async fn import_on_free_keeps_the_served_tools(pool: PgPool) {
     let app = App::new(pool).await;
     common::set_plan(&app.state.pool, app.user, "pro").await;
-    let report = app.import_petstore("pets").await;
-    let all = report.added.len();
+    app.import_petstore("pets").await;
     common::set_plan(&app.state.pool, app.user, "free").await;
+    let served = app.enabled_tools("pets").await;
+    assert_eq!(served.len(), 3);
 
     let manual = json!({ "name": "weather", "base_url": "https://a.example/v1", "auth": { "type": "none" } });
     let (status, api) = app
@@ -176,9 +178,13 @@ async fn import_on_free_keeps_the_enabled_tools(pool: PgPool) {
 
     let report = app.import_petstore("pets").await;
     assert!(report.added.is_empty());
-    let enabled = app.enabled_tools("pets").await;
-    assert_eq!(enabled.len(), all);
-    assert!(!enabled.contains(&"forecast".to_owned()));
+    assert_eq!(app.enabled_tools("pets").await, served);
+    let forecast_paused: bool =
+        sqlx::query_scalar("SELECT plan_paused FROM tools WHERE name = 'forecast'")
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap();
+    assert!(forecast_paused);
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -383,4 +389,92 @@ async fn new_users_get_the_default_plan(pool: PgPool) {
         .execute(&pool)
         .await;
     assert!(second_default.is_err());
+}
+
+/// The tool rows of `pets` as (name, enabled, paused), in id order.
+async fn tool_states(app: &App) -> Vec<(String, bool, bool)> {
+    let (status, tools) = app.json("GET", "/api/servers/pets/tools", None).await;
+    assert_eq!(status, StatusCode::OK);
+    tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            let name = t["name"].as_str().unwrap().to_owned();
+            (name, t["enabled"] == true, t["paused"] == true)
+        })
+        .collect()
+}
+
+async fn set_enabled(app: &App, tool: &str, enabled: bool) -> (StatusCode, Value) {
+    let path = format!("/api/servers/pets/tools/{tool}/enabled");
+    app.json("PUT", &path, Some(json!({ "enabled": enabled })))
+        .await
+}
+
+/// Petstore on Pro, then a move to Free: 3 tools on and the rest paused.
+async fn downgraded(pool: PgPool) -> App {
+    let app = App::new(pool).await;
+    common::set_plan(&app.state.pool, app.user, "pro").await;
+    app.import_petstore("pets").await;
+    common::set_plan(&app.state.pool, app.user, "free").await;
+    app
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn downgrade_pauses_the_tools_over_the_limit(pool: PgPool) {
+    let app = downgraded(pool).await;
+    let tools = tool_states(&app).await;
+    assert!(tools.len() > 3);
+    for (i, (name, enabled, paused)) in tools.iter().enumerate() {
+        assert_eq!(*enabled, i < 3, "{name}");
+        assert_eq!(*paused, i >= 3, "{name}");
+    }
+    let (_, billing) = app.json("GET", "/api/billing", None).await;
+    assert_eq!(billing["paused_tools"], tools.len() - 3);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn upgrade_turns_the_paused_tools_on_again(pool: PgPool) {
+    let app = downgraded(pool).await;
+    let off = tool_states(&app).await[0].0.clone();
+    set_enabled(&app, &off, false).await;
+
+    common::set_plan(&app.state.pool, app.user, "pro").await;
+    for (name, enabled, paused) in tool_states(&app).await {
+        // The tool that the user turned off stays off.
+        assert_eq!(enabled, name != off, "{name}");
+        assert!(!paused, "{name}");
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn turning_off_a_served_tool_keeps_the_paused_tools_paused(pool: PgPool) {
+    let app = downgraded(pool).await;
+    let before = tool_states(&app).await;
+    let (status, _) = set_enabled(&app, &before[0].0, false).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let after = tool_states(&app).await;
+    assert_eq!(after[0], (before[0].0.clone(), false, false));
+    assert_eq!(after[1..], before[1..]);
+    assert_eq!(app.enabled_tools("pets").await.len(), 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn paused_tool_turns_on_only_when_a_place_is_free(pool: PgPool) {
+    let app = downgraded(pool).await;
+    let tools = tool_states(&app).await;
+    let paused = tools[3].0.clone();
+
+    let (status, error) = set_enabled(&app, &paused, true).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["error"], "plan_limit");
+
+    set_enabled(&app, &tools[0].0, false).await;
+    let (status, _) = set_enabled(&app, &paused, true).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let after = tool_states(&app).await;
+    assert_eq!(after[3], (paused, true, false));
+    assert_eq!(app.enabled_tools("pets").await.len(), 3);
 }

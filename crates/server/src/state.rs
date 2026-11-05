@@ -10,6 +10,7 @@ use crate::{
     error::StartupError,
     live::LiveHub,
     mcp::{self, McpService, ToolportMcp},
+    payments::Payments,
     rate_limit::RateLimiter,
     secrets::SecretsKey,
     sessions::SessionPeers,
@@ -31,6 +32,8 @@ pub struct AppState {
     pub mcp_sessions: Arc<LocalSessionManager>,
     pub upstream_timeout: Duration,
     pub rate_limit: Arc<RateLimiter>,
+    /// `None` when the Stripe settings are missing. The billing routes then answer 503.
+    pub payments: Option<Arc<Payments>>,
 }
 
 pub struct AuthSettings {
@@ -81,6 +84,9 @@ impl AppState {
             peers: peers.clone(),
             rate_limit: rate_limit.clone(),
         };
+        let payments = Payments::from_config(config)
+            .map_err(StartupError::Payments)?
+            .map(Arc::new);
         let mcp_sessions = Arc::new(LocalSessionManager::default());
         Ok(Self {
             live,
@@ -95,6 +101,7 @@ impl AppState {
             peers,
             upstream_timeout,
             rate_limit,
+            payments,
         })
     }
 }

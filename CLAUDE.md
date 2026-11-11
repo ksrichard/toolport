@@ -99,8 +99,9 @@ Services in `compose.yaml`:
 
 Images:
 - `docker/server.Dockerfile`: a multi-stage build. Stage 1 uses `rust:1-bookworm` and
-  `cargo-chef` to cache dependencies. Stage 2 is `debian:bookworm-slim` with only the
-  binary and CA certificates. The process runs as a non-root user.
+  `cargo-chef` to cache dependencies. It links glibc statically (`+crt-static`), and the build
+  fails when the binary is not static. Stage 2 is `scratch` with only the binary, the CA
+  certificates, and a passwd entry. The process runs as a non-root user (10001).
 - `docker/caddy.Dockerfile`: stage 1 uses `node:22` to run `npm ci && npm run build` in `web/`.
   Stage 2 is the `caddy:2` image with the `dist/` folder and the Caddyfile.
 

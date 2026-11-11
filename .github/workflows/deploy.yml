@@ -141,7 +141,8 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | ssh "$VPS" "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
           ssh "$VPS" "set -e
             trap 'docker logout ghcr.io >/dev/null' EXIT
-            for dir in /var/lib/toolport/postgres /var/lib/toolport/caddy/data /var/lib/toolport/caddy/config; do
+            # The deploy user cannot read inside these root folders. Docker checks the subfolders.
+            for dir in /var/lib/toolport/postgres /var/lib/toolport/caddy; do
               test -d \$dir || { echo \"the data folder \$dir is missing\" >&2; exit 1; }
             done
             cd $APP_DIR

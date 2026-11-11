@@ -19,6 +19,18 @@ A live dashboard shows each call as it happens.
 https://<host>/mcp/<server-name>
 ```
 
+## Demo
+
+<p align="center">
+  <a href="docs/assets/toolport-demo.mp4"><img src="docs/assets/toolport-demo.gif" alt="ToolPort demo: create a token, watch live MCP calls, test a tool, and switch themes" width="800"></a>
+</p>
+
+The demo creates a token, and an MCP client calls the `weather` tools with it.
+The Live page shows the calls, one upstream error, and the connected client.
+Then the tool builder tests `getWeather` and shows the raw HTTP exchange.
+The demo ends with the other pages and the three themes.
+Click the GIF for the [full-speed MP4](docs/assets/toolport-demo.mp4).
+
 ## Features
 
 - **OpenAPI import.** Import a spec from a URL or a file. ToolPort makes one tool per operation. Path, query, and body parameters become one input schema.
@@ -70,6 +82,7 @@ You need Docker with Compose, and a GitHub OAuth app.
 4. Open https://localhost and sign in. Your browser warns about the local Caddy certificate the first time.
 
 The onboarding wizard helps you create your first server.
+For payments and for your own server, see [Run your own ToolPort](docs/self-hosting.md).
 You can start from a template (GitHub issues, Hacker News, Open-Meteo) or from your own spec.
 
 ## Connect a client
@@ -108,31 +121,11 @@ docker compose config
 
 ## Deploy
 
-`.github/workflows/deploy.yml` deploys `main` to one VPS, for example at https://toolport.example.com.
-The workflow is turned off in this repo. To use it in your fork, add the settings below and turn it on in the Actions tab.
-
-1. A push to `main` runs CI.
-2. When CI passes, the deploy workflow builds the `toolport-server` and `toolport-caddy` images and pushes them to GHCR.
-3. The workflow copies `compose.yaml`, `compose.prod.yaml`, and a new `.env` to `/opt/toolport` on the VPS.
-4. It pulls the new images, restarts the stack, and checks `/api/health`.
-
-Caddy is the only service with public ports. It gets and renews the Let's Encrypt certificate by itself.
-The database and the certificates live in host folders on the VPS: `/var/lib/toolport/postgres` and `/var/lib/toolport/caddy`.
-No Docker command deletes them, also not `docker compose down -v` or `docker volume prune`.
-When a folder is missing, the deploy stops. It never starts an empty database.
-The DNS record must point straight to the VPS, without the Cloudflare proxy.
-
-The workflow reads these settings from the repo:
-
-| Name | Kind | Content |
-| --- | --- | --- |
-| `VPS_HOST`, `TOOLPORT_DOMAIN` | Variable | The VPS address and the public domain. |
-| `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS` | Secret | The deploy SSH key and the VPS host key. |
-| `POSTGRES_PASSWORD`, `JWT_SECRET`, `SECRETS_KEY` | Secret | The production values. Never change `SECRETS_KEY`, because it decrypts the stored upstream secrets. |
-| `OAUTH_GITHUB_CLIENT_ID`, `OAUTH_GITHUB_CLIENT_SECRET` | Secret | The production GitHub OAuth app. GitHub does not allow secret names that start with `GITHUB_`. |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Secret | Optional. Without them, payments are off. |
-
-To deploy by hand, open the Actions tab and run the "Deploy" workflow.
+`.github/workflows/deploy.yml` deploys `main` to one server after CI passes.
+It builds the images, pushes them to GHCR, and restarts the stack with `compose.prod.yaml`.
+Caddy gets the Let's Encrypt certificate by itself.
+The workflow is turned off in this repo.
+[Run your own ToolPort](docs/self-hosting.md) shows how to set up the server, the repo settings, and Stripe for your fork.
 
 ## Configuration
 
@@ -149,7 +142,7 @@ All settings come from env vars. Each backend setting is also a command-line fla
 | `ALLOW_LOCAL_UPSTREAM` | `false` | Lets tools call APIs on loopback addresses. Use it only in local dev. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | empty | Turn on payments. Without them, the billing routes return 503. |
 
-For Stripe test mode, see the "Payments (test mode)" section in [`CLAUDE.md`](CLAUDE.md).
+For Stripe, see [Run your own ToolPort](docs/self-hosting.md#2-turn-on-payments-stripe-test-mode).
 
 ## Repository layout
 

@@ -116,6 +116,9 @@ docker compose config
 4. It pulls the new images, restarts the stack, and checks `/api/health`.
 
 Caddy is the only service with public ports. It gets and renews the Let's Encrypt certificate by itself.
+The database and the certificates live in host folders on the VPS: `/var/lib/toolport/postgres` and `/var/lib/toolport/caddy`.
+No Docker command deletes them, also not `docker compose down -v` or `docker volume prune`.
+When a folder is missing, the deploy stops. It never starts an empty database.
 The DNS record must point straight to the VPS, without the Cloudflare proxy.
 
 The workflow reads these settings from the repo:

@@ -272,6 +272,9 @@ Each milestone ends with working code, tests, and a short demo.
     `main`. It pushes the two images to GHCR and restarts the stack in `/opt/toolport` on the VPS
     with `compose.prod.yaml`. The VPS user is `deploy` (docker group, no sudo). The domain is
     `tokenproxy.dev`, with DNS only (no Cloudflare proxy), so Caddy can renew the certificate.
+    The Postgres data and the Caddy certificates are bind mounts of `/var/lib/toolport/postgres` and
+    `/var/lib/toolport/caddy/{data,config}` (root made them). `create_host_path: false` stops the start
+    when a folder is missing. Never run `down -v` or a volume prune on the VPS.
     The backup job is not done.
 14. Plans and billing. Free and Pro plans per account, paid with Stripe.
     Status: part A (the plans and their limits, without Stripe) is done. The `plans` table holds

@@ -108,7 +108,8 @@ docker compose config
 
 ## Deploy
 
-`.github/workflows/deploy.yml` deploys `main` to the production VPS at https://tokenproxy.dev.
+`.github/workflows/deploy.yml` deploys `main` to one VPS, for example at https://toolport.example.com.
+The workflow is turned off in this repo. To use it in your fork, add the settings below and turn it on in the Actions tab.
 
 1. A push to `main` runs CI.
 2. When CI passes, the deploy workflow builds the `toolport-server` and `toolport-caddy` images and pushes them to GHCR.

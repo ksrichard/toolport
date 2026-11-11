@@ -1,0 +1,161 @@
+name: Deploy
+
+# Runs after CI passes on a push to main. It builds the two images, pushes them to GHCR,
+# and starts the new images on the VPS. "Run workflow" in the Actions tab deploys main by hand.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time. A new deploy waits for the running one and does not cancel it.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [server, caddy]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.image }}.Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/toolport-${{ matrix.image }}:${{ env.DEPLOY_SHA }}
+            ${{ env.IMAGE_PREFIX }}/toolport-${{ matrix.image }}:latest
+          # The label links the package to this repo, so GITHUB_TOKEN can read it on the VPS.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.DEPLOY_SHA }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    environment:
+      name: production
+      url: https://${{ vars.TOOLPORT_DOMAIN }}
+    env:
+      VPS: deploy@${{ vars.VPS_HOST }}
+      APP_DIR: /opt/toolport
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          sparse-checkout: |
+            compose.yaml
+            compose.prod.yaml
+          sparse-checkout-cone-mode: false
+
+      - name: Check the required settings
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          TOOLPORT_DOMAIN: ${{ vars.TOOLPORT_DOMAIN }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SECRETS_KEY: ${{ secrets.SECRETS_KEY }}
+          OAUTH_GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
+          OAUTH_GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+        run: |
+          missing=0
+          for name in VPS_HOST TOOLPORT_DOMAIN VPS_SSH_KEY VPS_KNOWN_HOSTS POSTGRES_PASSWORD \
+            JWT_SECRET SECRETS_KEY OAUTH_GITHUB_CLIENT_ID OAUTH_GITHUB_CLIENT_SECRET; do
+            if [ -z "${!name}" ]; then echo "::error::the secret or variable $name is not set"; missing=1; fi
+          done
+          exit $missing
+
+      - name: Set up SSH
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Copy the Compose files
+        run: scp compose.yaml compose.prod.yaml "$VPS:$APP_DIR/"
+
+      # GitHub does not allow secret names that start with GITHUB_, so the OAuth app
+      # values are stored as OAUTH_GITHUB_*. The .env file on the VPS uses the real names.
+      - name: Write the .env file
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SECRETS_KEY: ${{ secrets.SECRETS_KEY }}
+          GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          TOOLPORT_DOMAIN: ${{ vars.TOOLPORT_DOMAIN }}
+        run: |
+          {
+            echo "TOOLPORT_DOMAIN=$TOOLPORT_DOMAIN"
+            echo "TOOLPORT_IMAGE_PREFIX=$IMAGE_PREFIX"
+            echo "TOOLPORT_TAG=$DEPLOY_SHA"
+            echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD"
+            echo "JWT_SECRET=$JWT_SECRET"
+            echo "SECRETS_KEY=$SECRETS_KEY"
+            echo "GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID"
+            echo "GITHUB_CLIENT_SECRET=$GITHUB_CLIENT_SECRET"
+            echo "STRIPE_SECRET_KEY=$STRIPE_SECRET_KEY"
+            echo "STRIPE_WEBHOOK_SECRET=$STRIPE_WEBHOOK_SECRET"
+          } | ssh "$VPS" "umask 077 && cat > $APP_DIR/.env"
+
+      # The job token can only read packages, and it expires when the job ends.
+      - name: Pull the images and restart the stack
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | ssh "$VPS" "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+          ssh "$VPS" "set -e
+            cd $APP_DIR
+            compose='docker compose -f compose.yaml -f compose.prod.yaml'
+            trap 'docker logout ghcr.io >/dev/null' EXIT
+            \$compose pull --quiet
+            \$compose up -d --remove-orphans
+            docker image prune -f >/dev/null"
+
+      - name: Check the server health
+        run: |
+          for _ in $(seq 1 30); do
+            if ssh "$VPS" "cd $APP_DIR && docker compose -f compose.yaml -f compose.prod.yaml \
+                exec -T caddy wget -qO- http://server:8080/api/health"; then
+              echo; echo "the server is healthy"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the server did not become healthy"
+          ssh "$VPS" "cd $APP_DIR && docker compose -f compose.yaml -f compose.prod.yaml logs --tail 50 server"
+          exit 1

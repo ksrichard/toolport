@@ -267,6 +267,11 @@ Each milestone ends with working code, tests, and a short demo.
     one short sentence.
 13. Deploy. Run the same `compose.yaml` on one host with a real `TOOLPORT_DOMAIN`.
     Add a Postgres backup job. Ask before any change to real infrastructure.
+    Status: the deploy pipeline is done. `.github/workflows/deploy.yml` runs after CI passes on
+    `main`. It pushes the two images to GHCR and restarts the stack in `/opt/toolport` on the VPS
+    with `compose.prod.yaml`. The VPS user is `deploy` (docker group, no sudo). The domain is
+    `tokenproxy.dev`, with DNS only (no Cloudflare proxy), so Caddy can renew the certificate.
+    The backup job is not done.
 14. Plans and billing. Free and Pro plans per account, paid with Stripe.
     Status: part A (the plans and their limits, without Stripe) is done. The `plans` table holds
     each plan and its limits (NULL in a `max_*` column means no limit). The migration inserts Free

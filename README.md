@@ -106,6 +106,30 @@ cd web && npm run lint && npm run build && npm run check:preview
 docker compose config
 ```
 
+## Deploy
+
+`.github/workflows/deploy.yml` deploys `main` to the production VPS at https://tokenproxy.dev.
+
+1. A push to `main` runs CI.
+2. When CI passes, the deploy workflow builds the `toolport-server` and `toolport-caddy` images and pushes them to GHCR.
+3. The workflow copies `compose.yaml`, `compose.prod.yaml`, and a new `.env` to `/opt/toolport` on the VPS.
+4. It pulls the new images, restarts the stack, and checks `/api/health`.
+
+Caddy is the only service with public ports. It gets and renews the Let's Encrypt certificate by itself.
+The DNS record must point straight to the VPS, without the Cloudflare proxy.
+
+The workflow reads these settings from the repo:
+
+| Name | Kind | Content |
+| --- | --- | --- |
+| `VPS_HOST`, `TOOLPORT_DOMAIN` | Variable | The VPS address and the public domain. |
+| `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS` | Secret | The deploy SSH key and the VPS host key. |
+| `POSTGRES_PASSWORD`, `JWT_SECRET`, `SECRETS_KEY` | Secret | The production values. Never change `SECRETS_KEY`, because it decrypts the stored upstream secrets. |
+| `OAUTH_GITHUB_CLIENT_ID`, `OAUTH_GITHUB_CLIENT_SECRET` | Secret | The production GitHub OAuth app. GitHub does not allow secret names that start with `GITHUB_`. |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Secret | Optional. Without them, payments are off. |
+
+To deploy by hand, open the Actions tab and run the "Deploy" workflow.
+
 ## Configuration
 
 All settings come from env vars. Each backend setting is also a command-line flag.

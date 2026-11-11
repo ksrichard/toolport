@@ -270,8 +270,9 @@ Each milestone ends with working code, tests, and a short demo.
     Add a Postgres backup job. Ask before any change to real infrastructure.
     Status: the deploy pipeline is done. `.github/workflows/deploy.yml` runs after CI passes on
     `main`. It pushes the two images to GHCR and restarts the stack in `/opt/toolport` on the VPS
-    with `compose.prod.yaml`. The VPS user is `deploy` (docker group, no sudo). The domain is
-    `tokenproxy.dev`, with DNS only (no Cloudflare proxy), so Caddy can renew the certificate.
+    with `compose.prod.yaml`. The VPS user is `deploy` (docker group, no sudo). The domain comes
+    from `TOOLPORT_DOMAIN`, with DNS only (no Cloudflare proxy), so Caddy can renew the certificate.
+    The workflow is turned off in the public repo, and the repo has no deploy secrets.
     The Postgres data and the Caddy certificates are bind mounts of `/var/lib/toolport/postgres` and
     `/var/lib/toolport/caddy/{data,config}` (root made them). `create_host_path: false` stops the start
     when a folder is missing. Never run `down -v` or a volume prune on the VPS.
